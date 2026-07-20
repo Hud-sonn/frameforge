@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ from .ffmpeg_utils import (
     check_ffmpeg,
     convert_image,
     encode_frames,
+    extract_frame_at_timestamp,
     extract_frames,
     probe_video,
     write_manifest,
@@ -136,21 +138,30 @@ async def preview(
     if not job:
         raise HTTPException(404, "Job not found")
 
-    # Extract a few sample frames
-    sample_dir = str(Path(job.tmp_dir) / "preview")
-    count = await extract_frames(job.source_path, sample_dir, fps, trimStart, trimEnd)
+    duration = trimEnd - trimStart
+    if duration <= 0:
+        raise HTTPException(400, "Trim range must be positive")
 
-    if count == 0:
-        raise HTTPException(400, "No frames extracted")
-
-    # Pick 4 evenly spaced samples
-    sample_indices = [
-        max(0, int(count * p) - 1) for p in [0.1, 0.4, 0.7, 0.9]
+    # Extract only 4 sample frames at evenly spaced timestamps
+    timestamps = [
+        trimStart + duration * p for p in [0.05, 0.35, 0.65, 0.95]
     ]
-    sample_indices = sorted(set(min(i, count - 1) for i in sample_indices))
 
-    preview_dir = str(Path(job.tmp_dir) / "preview_encoded")
-    Path(preview_dir).mkdir(parents=True, exist_ok=True)
+    sample_dir = Path(job.tmp_dir) / "preview"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    extracted_indices = []
+    for i, ts in enumerate(timestamps):
+        out = sample_dir / f"frame_{i+1:04d}.png"
+        ok = await extract_frame_at_timestamp(job.source_path, str(out), ts)
+        if ok and out.exists():
+            extracted_indices.append(i)
+
+    if not extracted_indices:
+        raise HTTPException(400, "No frames could be extracted")
+
+    preview_dir = Path(job.tmp_dir) / "preview_encoded"
+    preview_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
     quality_presets = {
@@ -161,22 +172,44 @@ async def preview(
     presets = quality_presets.get(fmt, quality_presets["avif"])
 
     for qi, preset in enumerate(presets):
-        preset_dir = str(Path(preview_dir) / f"q{qi}")
-        await encode_frames(sample_dir, preset_dir, fmt, preset)
-        encoded_files = sorted(Path(preset_dir).glob(f"*.{fmt if fmt != 'jpeg' else 'jpg'}"))
+        qdir = preview_dir / f"q{qi}"
+        qdir.mkdir(parents=True, exist_ok=True)
+        for i in extracted_indices:
+            src = sample_dir / f"frame_{i+1:04d}.png"
+            if not src.exists():
+                continue
+            ext_map = {"avif": "avif", "jpeg": "jpg", "webp": "webp"}
+            dst = qdir / f"frame_{i+1:04d}.{ext_map.get(fmt, fmt)}"
+            if fmt == "png":
+                shutil.copy2(str(src), str(dst))
+            else:
+                cmd = [FFMPEG, "-y", "-i", str(src)]
+                if fmt == "jpeg":
+                    cmd += ["-q:v", str(preset.get("qv", 5))]
+                elif fmt == "webp":
+                    cmd += ["-quality", str(preset.get("quality", 80))]
+                elif fmt == "avif":
+                    cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-still-picture", "1"]
+                cmd.append(str(dst))
+                proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await proc.wait()
+
         frame_data = []
-        for idx in sample_indices:
-            if idx < len(encoded_files):
-                import base64
-                data = encoded_files[idx].read_bytes()
+        for i in extracted_indices:
+            ext_map = {"avif": "avif", "jpeg": "jpg", "webp": "webp"}
+            f = qdir / f"frame_{i+1:04d}.{ext_map.get(fmt, fmt)}"
+            if f.exists():
+                data = f.read_bytes()
                 frame_data.append({
-                    "index": idx,
+                    "index": i,
                     "size": len(data),
                     "image": base64.b64encode(data).decode(),
                 })
+            else:
+                frame_data.append({"index": i, "size": 0, "image": None})
         results.append({"quality": preset, "frames": frame_data})
 
-    return {"samples": results, "sampleIndices": sample_indices}
+    return {"samples": results, "sampleIndices": extracted_indices}
 
 
 @router.post("/encode")
@@ -187,15 +220,20 @@ async def encode(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
     quality: str = Form('{"crf": 30}'),
+    fallback: str = Form("false"),
 ):
     job = jobs.get(jobId)
     if not job:
         raise HTTPException(404, "Job not found")
 
     quality_dict = json.loads(quality)
+    do_fallback = fallback.lower() == "true"
     jobs.update(jobId, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
 
     _progress[jobId] = {"stage": "extract", "current": 0, "total": 0}
+
+    async def _extract_progress(c):
+        _progress.update({jobId: {"stage": "extract", "current": c, "total": 0}})
 
     # Step 1: Extract PNG intermediates
     try:
@@ -205,7 +243,7 @@ async def encode(
             fps,
             trimStart,
             trimEnd,
-            progress_callback=lambda c: _progress.update({jobId: {"stage": "extract", "current": c, "total": 0}}),
+            progress_callback=_extract_progress,
         )
     except Exception as e:
         jobs.update(jobId, status="failed")
@@ -216,14 +254,31 @@ async def encode(
     output_dir = str(OUTPUT_DIR / jobId)
     _progress[jobId] = {"stage": "encode", "current": 0, "total": frame_count}
 
+    async def _encode_progress(c, t):
+        _progress.update({jobId: {"stage": "encode", "current": c, "total": t}})
+
     try:
         encoded_count = await encode_frames(
             job.tmp_dir,
             output_dir,
             fmt,
             quality_dict,
-            progress_callback=lambda c, t: _progress.update({jobId: {"stage": "encode", "current": c, "total": t}}),
+            progress_callback=_encode_progress,
         )
+
+        # Step 2b: JPEG fallback (if requested and primary format is not JPEG)
+        fallback_count = 0
+        fallback_pattern = ""
+        if do_fallback and fmt != "jpeg":
+            fallback_dir = str(OUTPUT_DIR / f"{jobId}_fallback")
+            fallback_count = await encode_frames(
+                job.tmp_dir,
+                fallback_dir,
+                "jpeg",
+                {"qv": 5},
+                progress_callback=_encode_progress,
+            )
+            fallback_pattern = "frame_%04d.jpg"
     except Exception as e:
         jobs.update(jobId, status="failed")
         raise HTTPException(500, f"Encoding failed: {e}")
@@ -241,6 +296,8 @@ async def encode(
         width=job.width,
         height=job.height,
         source_size=job.source_size_bytes,
+        fallback_format="jpeg" if do_fallback and fallback_count > 0 else None,
+        fallback_pattern=fallback_pattern if do_fallback and fallback_count > 0 else None,
     )
 
     # Calculate total output size

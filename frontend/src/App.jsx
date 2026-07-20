@@ -22,9 +22,7 @@ function timeAgo(iso) {
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+  return `${Math.floor(mins / 60)}h ago`;
 }
 
 function SvgUpload() { return (<svg className="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>); }
@@ -32,10 +30,10 @@ function SvgPlay() { return (<svg viewBox="0 0 24 24" fill="currentColor"><path 
 function SvgCopy() { return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>); }
 function SvgDownload() { return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4V16M12 16L7 11M12 16L17 11M5 20H19"/></svg>); }
 function SvgInfo() { return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>); }
-function SvgImage() { return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>); }
 function SvgCheck() { return (<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#050403" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>); }
+function SvgSpinner() { return (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>); }
 
-/* ─── Sub-components ─── */
+/* ─── Frame Extraction Flow ─── */
 
 function Dropzone({ onFile, uploading }) {
   const [dragging, setDragging] = useState(false);
@@ -46,7 +44,7 @@ function Dropzone({ onFile, uploading }) {
       <div className={`dropzone ${dragging ? 'dragging' : ''}`} onClick={() => ref.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={handleDrop}>
         <SvgUpload />
-        <h3>{uploading ? 'Uploading...' : 'Drop a video file here'}</h3>
+        <h3>{uploading ? 'Uploading…' : 'Drop a video file here'}</h3>
         <p>or click to browse – MP4, MOV, MKV, WEBM</p>
         <div className="formats">MP4 · MOV · MKV · WEBM</div>
       </div>
@@ -63,7 +61,7 @@ function VideoSummary({ job }) {
       <div className="video-meta">
         <div className="fname">{job.filename}</div>
         <div className="meta-chips">
-          <span className="chip">{m.width}x{m.height}</span>
+          <span className="chip">{m.width}×{m.height}</span>
           <span className="chip">{formatDuration(m.duration)}</span>
           <span className="chip">{m.fps} fps</span>
           <span className="chip">{m.codec}</span>
@@ -90,11 +88,11 @@ function TrimControls({ duration, trimStart, trimEnd, onChange }) {
         <span>Out: <span className="highlight">{trimEnd.toFixed(1)}s</span></span>
       </div>
       <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center' }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--bone-faint)', width: 70 }}>TRIM START</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--bone-faint)', width: 70, flexShrink: 0 }}>TRIM START</span>
         <input type="range" min={0} max={duration} step={0.1} value={trimStart}
           onChange={(e) => onChange(Math.min(Number(e.target.value), trimEnd - 0.2), trimEnd)}
           style={{ flex: 1, accentColor: '#C4A35A' }} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--bone-faint)', width: 64 }}>END</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--bone-faint)', width: 30, flexShrink: 0 }}>END</span>
         <input type="range" min={0} max={duration} step={0.1} value={trimEnd}
           onChange={(e) => onChange(trimStart, Math.max(Number(e.target.value), trimStart + 0.2))}
           style={{ flex: 1, accentColor: '#C4A35A' }} />
@@ -103,24 +101,7 @@ function TrimControls({ duration, trimStart, trimEnd, onChange }) {
   );
 }
 
-function QualitySelector({ fmt, quality, setQuality, fallback, setFallback }) {
-  return (
-    <div className="field">
-      <label>Quality</label>
-      {fmt === 'avif' && (<div className="segmented">{[24, 30, 36].map(crf => (<button key={crf} className={quality.crf === crf ? 'active' : ''} onClick={() => setQuality({ crf })}>CRF {crf}</button>))}</div>)}
-      {fmt === 'jpeg' && (<div className="segmented">{[2, 5, 8].map(qv => (<button key={qv} className={quality.qv === qv ? 'active' : ''} onClick={() => setQuality({ qv })}>Q:v {qv}</button>))}</div>)}
-      {fmt === 'webp' && (<div className="segmented">{[90, 70, 50].map(q => (<button key={q} className={quality.quality === q ? 'active' : ''} onClick={() => setQuality({ quality: q })}>{q}%</button>))}</div>)}
-      {fmt === 'png' && (<div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--bone-dim)', padding: '10px 0' }}>Lossless passthrough — no quality setting</div>)}
-      {fmt !== 'png' && (<div className="checkbox-row" onClick={() => setFallback(!fallback)}><div className={`cb ${fallback ? 'checked' : ''}`}>{fallback && <SvgCheck/>}</div>Also export JPEG fallback</div>)}
-      <div className="tradeoff-note mt-16">
-        <SvgInfo/>
-        <span>{fmt === 'avif' && 'AVIF offers best compression but needs JPEG fallback for older browsers.'}{fmt === 'jpeg' && 'JPEG has universal browser support but produces larger files.'}{fmt === 'webp' && 'WebP balances size and compatibility — works in all modern browsers.'}{fmt === 'png' && 'PNG is lossless — ideal when quality matters more than file size.'}</span>
-      </div>
-    </div>
-  );
-}
-
-function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, setFmt, quality, setQuality, fallback, setFallback, frameCount, onPreview }) {
+function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, setFmt, quality, setQuality, fallback, setFallback, frameCount, onPreview, previewing }) {
   return (
     <>
       <div className="panel">
@@ -136,19 +117,29 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
           </div>
           <div className="field">
             <label>Format</label>
-            <div className="radio-stack">{FORMATS.map(f => (<div key={f.id} className={`radio-row ${fmt === f.id ? 'selected' : ''}`} onClick={() => setFmt(f.id)}><div className="rb"/><div className="rtext"><div className="rname">{f.name}</div><div className="rnote">{f.note}</div></div></div>))}</div>
+            <div className="radio-stack">{FORMATS.map(f => (<div key={f.id} className={`radio-row ${fmt === f.id ? 'selected' : ''}`} onClick={() => { setFmt(f.id); setQuality(f.id === 'avif' ? { crf: 30 } : f.id === 'jpeg' ? { qv: 5 } : f.id === 'webp' ? { quality: 80 } : {}); }}><div className="rb"/><div className="rtext"><div className="rname">{f.name}</div><div className="rnote">{f.note}</div></div></div>))}</div>
           </div>
-          <QualitySelector fmt={fmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} />
+          <div className="field">
+            <label>Quality</label>
+            {fmt === 'avif' && (<div className="segmented">{[24, 30, 36].map(crf => (<button key={crf} className={quality.crf === crf ? 'active' : ''} onClick={() => setQuality({ crf })}>CRF {crf}</button>))}</div>)}
+            {fmt === 'jpeg' && (<div className="segmented">{[2, 5, 8].map(qv => (<button key={qv} className={quality.qv === qv ? 'active' : ''} onClick={() => setQuality({ qv })}>Q:v {qv}</button>))}</div>)}
+            {fmt === 'webp' && (<div className="segmented">{[90, 70, 50].map(q => (<button key={q} className={quality.quality === q ? 'active' : ''} onClick={() => setQuality({ quality: q })}>{q}%</button>))}</div>)}
+            {fmt === 'png' && (<div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--bone-dim)', padding: '10px 0' }}>Lossless passthrough</div>)}
+            {fmt !== 'png' && (<div className="checkbox-row" onClick={() => setFallback(!fallback)}><div className={`cb ${fallback ? 'checked' : ''}`}>{fallback && <SvgCheck/>}</div>Also export JPEG fallback</div>)}
+            <div className="tradeoff-note mt-16"><SvgInfo/><span>{fmt === 'avif' && 'AVIF offers best compression but needs JPEG fallback for older browsers.'}{fmt === 'jpeg' && 'JPEG has universal browser support but produces larger files.'}{fmt === 'webp' && 'WebP balances size and compatibility.'}{fmt === 'png' && 'PNG is lossless — ideal when quality matters more than file size.'}</span></div>
+          </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
-          <button className="btn btn-primary" onClick={onPreview}>Preview Quality</button>
+          <button className="btn btn-primary" onClick={onPreview} disabled={previewing}>
+            {previewing && <SvgSpinner/>}{previewing ? 'Extracting samples…' : 'Preview Quality'}
+          </button>
         </div>
       </div>
     </>
   );
 }
 
-function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack }) {
+function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, encoding }) {
   const presets = preview.samples || [];
   if (presets.length === 0) return (<div className="panel"><p>No preview data — video may be too short.</p></div>);
 
@@ -162,21 +153,23 @@ function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack }
         <div className="preview-header">Frame</div>
         {qualityLabels.map((l, qi) => (<div key={qi} className="preview-header">{l}</div>))}
         {(preview.sampleIndices || []).map((fi, row) => (<React.Fragment key={fi}>
-          <div className="preview-row-label">Frame {fi + 1}</div>
+          <div className="preview-row-label">Sample {row + 1}</div>
           {presets.map((preset, qi) => {
             const f = preset.frames?.[row];
             const sel = selectedQuality !== null && selectedQuality === qi;
             return (<div key={qi} className={`preview-cell ${sel ? 'selected' : ''}`} onClick={() => onSelect(qi)}>
               <span className="pick-tag">SELECTED</span>
-              {f ? <img src={`data:image/jpeg;base64,${f.image}`} alt="" /> : <div style={{ height: 80, background: 'var(--char)' }} />}
-              <div className="cell-info"><span>{f ? formatSize(f.size) : '—'}</span></div>
+              {f?.image ? <img src={`data:image/jpeg;base64,${f.image}`} alt="" /> : <div style={{ height: 80, background: 'var(--char)' }} />}
+              <div className="cell-info"><span>{f?.size ? formatSize(f.size) : '—'}</span></div>
             </div>);
           })}
         </React.Fragment>))}
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20, gap: 10 }}>
-        <button className="btn btn-ghost" onClick={onBack}>Back</button>
-        <button className="btn btn-primary" onClick={() => onEncode(selectedQuality !== null ? presets[selectedQuality].quality : null)}>Confirm &amp; Run Full Batch</button>
+        <button className="btn btn-ghost" onClick={onBack} disabled={encoding}>Back</button>
+        <button className="btn btn-primary" onClick={() => onEncode(selectedQuality !== null ? presets[selectedQuality].quality : null)} disabled={encoding}>
+          {encoding && <SvgSpinner/>}{encoding ? 'Encoding…' : 'Confirm & Run Full Batch'}
+        </button>
       </div>
     </div>
   );
@@ -185,6 +178,7 @@ function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack }
 function ProgressPanel({ jobId, onDone, onError }) {
   const [state, setState] = useState({ stage: 'extract', current: 0, total: 0 });
   const [startTime] = useState(Date.now());
+  const [finished, setFinished] = useState(false);
   const cancelled = useRef(false);
 
   useEffect(() => {
@@ -196,12 +190,13 @@ function ProgressPanel({ jobId, onDone, onError }) {
         const p = st.progress || {};
         setState(p);
         if (st.status === 'done' || p.stage === 'done') {
+          setFinished(true);
           onDone();
           return;
         }
-        if (st.status === 'failed') { onError('Job failed'); return; }
+        if (st.status === 'failed') { onError('Job failed — check logs'); return; }
         timer = setTimeout(poll, 800);
-      } catch (e) { timer = setTimeout(poll, 800); }
+      } catch { timer = setTimeout(poll, 1500); }
     };
     poll();
     return () => { cancelled.current = true; clearTimeout(timer); };
@@ -210,7 +205,7 @@ function ProgressPanel({ jobId, onDone, onError }) {
   const total = state.total || 1;
   const pct = Math.min(100, Math.round((state.current / total) * 100));
   const elapsed = Math.round((Date.now() - startTime) / 1000);
-  const stageLabel = state.stage === 'extract' ? 'Extracting frames from video…' : state.stage === 'encode' ? 'Encoding frames…' : state.stage === 'done' ? 'Complete' : 'Processing…';
+  const stageLabel = state.stage === 'extract' ? 'Extracting frames from video…' : state.stage === 'encode' ? 'Encoding frames…' : state.stage === 'done' || finished ? 'Complete' : 'Processing…';
   const circumference = 2 * Math.PI * 50;
   const offset = circumference - (pct / 100) * circumference;
 
@@ -224,34 +219,34 @@ function ProgressPanel({ jobId, onDone, onError }) {
           </svg>
           <div className="pct">{pct}%</div>
         </div>
-        <div className="progress-status"><strong>{stageLabel}</strong>{state.total > 0 && ` — frame ${state.current} of ${state.total}`}</div>
-        <div className="progress-eta">{state.stage === 'done' ? 'Complete' : `${elapsed}s elapsed`}</div>
+        <div className="progress-status"><strong>{stageLabel}</strong>{state.total > 0 && !finished && ` — ${state.current} of ${state.total}`}</div>
+        <div className="progress-eta">{finished ? 'Done' : `${elapsed}s`}</div>
       </div>
     </div>
   );
 }
 
-function ResultsPanel({ result, job, onReset }) {
+function ResultsPanel({ result, sourceSizeBytes, onReset }) {
   const [manifest, setManifest] = useState(null);
   useEffect(() => { if (result?.jobId) api.getManifest(result.jobId).then(setManifest).catch(() => {}); }, [result]);
 
-  const srcSize = job?.source_size_bytes || result?.sourceSize || 0;
-  const outSize = result.totalSizeBytes || 0;
-  const ratio = srcSize > 0 ? ((outSize / srcSize) * 100).toFixed(1) : 0;
-  const saved = srcSize - outSize;
+  const outSize = result?.totalSizeBytes || 0;
+  const hasSource = sourceSizeBytes > 0;
+  const ratio = hasSource ? ((outSize / sourceSizeBytes) * 100).toFixed(1) : 0;
+  const saved = sourceSizeBytes - outSize;
 
   return (
     <div className="panel">
       <div className="panel-title">Encoding Complete</div>
-      <div className="panel-sub">{result.frameCount} frames · {result.status}</div>
-      <div className="results-grid" style={{ gridTemplateColumns: srcSize > 0 ? 'repeat(4, 1fr)' : 'repeat(2, 1fr)' }}>
-        <div className="stat-card"><div className="stat-label">Frames</div><div className="stat-value ember">{result.frameCount}</div></div>
+      <div className="panel-sub">{result?.frameCount || 0} frames · {result?.status}</div>
+      <div className="results-grid" style={{ gridTemplateColumns: hasSource ? 'repeat(4, 1fr)' : 'repeat(2, 1fr)' }}>
+        <div className="stat-card"><div className="stat-label">Frames</div><div className="stat-value ember">{result?.frameCount || 0}</div></div>
         <div className="stat-card"><div className="stat-label">Output Size</div><div className="stat-value">{formatSize(outSize)}</div></div>
-        {srcSize > 0 && (<div className="stat-card"><div className="stat-label">Source Size</div><div className="stat-value">{formatSize(srcSize)}</div></div>)}
-        {srcSize > 0 && (<div className="stat-card"><div className="stat-label">Compression</div><div className="stat-value ember">{ratio}%</div>{saved > 0 && <div className="stat-delta">Saved {formatSize(saved)}</div>}</div>)}
+        {hasSource && (<div className="stat-card"><div className="stat-label">Source Size</div><div className="stat-value">{formatSize(sourceSizeBytes)}</div></div>)}
+        {hasSource && (<div className="stat-card"><div className="stat-label">Compression</div><div className="stat-value ember">{ratio}%</div>{saved > 0 && <div className="stat-delta">Saved {formatSize(saved)}</div>}</div>)}
       </div>
-      {srcSize > 0 && (<div className="compare-bar-wrap">
-        <div className="compare-row"><span className="clabel">Source</span><div className="compare-track"><div className="compare-fill before" /></div><span className="cval">{formatSize(srcSize)}</span></div>
+      {hasSource && (<div className="compare-bar-wrap">
+        <div className="compare-row"><span className="clabel">Source</span><div className="compare-track"><div className="compare-fill before" /></div><span className="cval">{formatSize(sourceSizeBytes)}</span></div>
         <div className="compare-row"><span className="clabel">Output</span><div className="compare-track"><div className="compare-fill after" style={{ width: `${Math.min(100, Number(ratio))}%` }} /></div><span className="cval">{formatSize(outSize)}</span></div>
       </div>)}
       {manifest && (<div className="manifest-block">
@@ -267,7 +262,7 @@ function ResultsPanel({ result, job, onReset }) {
 }
 
 function JobHistoryList({ jobs, onRerun }) {
-  if (!jobs.length) return (<div className="panel"><div className="panel-title">No jobs yet</div><div className="panel-sub">Extract some frames first — come back to re-run with different settings.</div></div>);
+  if (!jobs.length) return (<div className="panel"><div className="panel-title">No jobs yet</div><div className="panel-sub">Extract some frames first.</div></div>);
   return (
     <div className="panel">
       <div className="panel-title">Recent jobs</div>
@@ -301,21 +296,14 @@ function ImageConverter() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const handleFile = useCallback((f) => {
-    setFile(f);
-    setPreviewUrl(URL.createObjectURL(f));
-    setResult(null);
-    setError(null);
-  }, []);
+  const handleFile = useCallback((f) => { setFile(f); setPreviewUrl(URL.createObjectURL(f)); setResult(null); setError(null); }, []);
 
   const doConvert = async () => {
     if (!file) return;
     setConverting(true);
     setError(null);
-    try {
-      const data = await api.convertImage(file, { fmt, quality, resize });
-      setResult(data);
-    } catch (e) { setError(e.message); }
+    try { setResult(await api.convertImage(file, { fmt, quality, resize })); }
+    catch (e) { setError(e.message); }
     setConverting(false);
   };
 
@@ -331,8 +319,8 @@ function ImageConverter() {
   return (
     <>
       <div className="panel">
-        <div className={`dropzone ${file ? '' : ''}`} onClick={() => !file && document.getElementById('img-input')?.click()}
-          style={{ padding: file ? 16 : 56, cursor: file ? 'default' : 'pointer', border: file ? '1px solid var(--line)' : undefined }}>
+        <div className={`dropzone`} onClick={() => !file && document.getElementById('img-input')?.click()}
+          style={{ padding: file ? 16 : 56, cursor: file ? 'default' : 'pointer', border: file ? '1px solid var(--line)' : undefined  }}>
           {!file ? (<><SvgUpload /><h3>Drop an image here</h3><p>or click to browse – PNG, JPEG, WebP, AVIF</p></>) : (
             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
               {previewUrl && <img src={previewUrl} alt="" style={{ width: 80, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--line)' }} />}
@@ -344,50 +332,32 @@ function ImageConverter() {
         <input id="img-input" type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
       </div>
 
-      {file && (
-        <div className="panel">
-          <div className="controls-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-            <div className="field">
-              <label>Output Format</label>
-              <div className="segmented">
-                {FORMATS.map(f => (<button key={f.id} className={fmt === f.id ? 'active' : ''} onClick={() => { setFmt(f.id); setQuality(f.id === 'avif' ? { crf: 30 } : f.id === 'jpeg' ? { qv: 5 } : f.id === 'webp' ? { quality: 80 } : {}); }}>{f.name}</button>))}
-              </div>
-            </div>
-            <div className="field">
-              <label>Quality</label>
-              {fmt === 'avif' && (<div className="segmented">{[24, 30, 36].map(crf => (<button key={crf} className={quality.crf === crf ? 'active' : ''} onClick={() => setQuality({ crf })}>CRF {crf}</button>))}</div>)}
-              {fmt === 'jpeg' && (<div className="segmented">{[2, 5, 8].map(qv => (<button key={qv} className={quality.qv === qv ? 'active' : ''} onClick={() => setQuality({ qv })}>Q:v {qv}</button>))}</div>)}
-              {fmt === 'webp' && (<div className="segmented">{[90, 70, 50].map(q => (<button key={q} className={quality.quality === q ? 'active' : ''} onClick={() => setQuality({ quality: q })}>{q}%</button>))}</div>)}
-              {fmt === 'png' && (<div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--bone-dim)', padding: '10px 0' }}>Lossless</div>)}
-            </div>
-            <div className="field">
-              <label>Resize (optional)</label>
-              <div className="segmented">
-                {['', '1920:-1', '1280:-1', '800:-1', '400:-1'].map(r => (<button key={r || 'none'} className={resize === r ? 'active' : ''} onClick={() => setResize(r)}>{r || 'Original'}</button>))}
-              </div>
-            </div>
+      {file && (<div className="panel">
+        <div className="controls-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+          <div className="field"><label>Output Format</label><div className="segmented">{FORMATS.map(f => (<button key={f.id} className={fmt === f.id ? 'active' : ''} onClick={() => { setFmt(f.id); setQuality(f.id === 'avif' ? { crf: 30 } : f.id === 'jpeg' ? { qv: 5 } : f.id === 'webp' ? { quality: 80 } : {}); }}>{f.name}</button>))}</div></div>
+          <div className="field"><label>Quality</label>
+            {fmt === 'avif' && (<div className="segmented">{[24, 30, 36].map(crf => (<button key={crf} className={quality.crf === crf ? 'active' : ''} onClick={() => setQuality({ crf })}>CRF {crf}</button>))}</div>)}
+            {fmt === 'jpeg' && (<div className="segmented">{[2, 5, 8].map(qv => (<button key={qv} className={quality.qv === qv ? 'active' : ''} onClick={() => setQuality({ qv })}>Q:v {qv}</button>))}</div>)}
+            {fmt === 'webp' && (<div className="segmented">{[90, 70, 50].map(q => (<button key={q} className={quality.quality === q ? 'active' : ''} onClick={() => setQuality({ quality: q })}>{q}%</button>))}</div>)}
+            {fmt === 'png' && (<div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--bone-dim)', padding: '10px 0' }}>Lossless</div>)}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20, gap: 10 }}>
-            <button className="btn btn-primary" onClick={doConvert} disabled={converting}>{converting ? 'Converting…' : 'Convert'}</button>
-          </div>
+          <div className="field"><label>Resize</label><div className="segmented">{['', '1920:-1', '1280:-1', '800:-1', '400:-1'].map(r => (<button key={r || 'none'} className={resize === r ? 'active' : ''} onClick={() => setResize(r)}>{r || 'Original'}</button>))}</div></div>
         </div>
-      )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20, gap: 10 }}>
+          <button className="btn btn-primary" onClick={doConvert} disabled={converting}>{converting ? 'Converting…' : 'Convert'}</button>
+        </div>
+      </div>)}
 
       {error && (<div className="panel"><div className="panel-title" style={{ color: 'var(--danger)' }}>Error</div><div className="panel-sub">{error}</div></div>)}
 
-      {result && (
-        <div className="panel">
-          <div className="panel-title">Conversion Complete</div>
-          <div className="panel-sub">Output size: {formatSize(result.size)}</div>
-          <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 8 }}>
-            <img src={`data:image/${fmt === 'jpeg' ? 'jpeg' : fmt};base64,${result.image}`} alt="converted" style={{ maxWidth: 200, maxHeight: 120, borderRadius: 6, border: '1px solid var(--line)' }} />
-            <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--bone-dim)', marginBottom: 4 }}>Format: {fmt.toUpperCase()} · {formatSize(result.size)}</div>
-              <button className="btn btn-primary" onClick={downloadData}><SvgDownload/> Download</button>
-            </div>
-          </div>
+      {result && (<div className="panel">
+        <div className="panel-title">Conversion Complete</div>
+        <div className="panel-sub">Output: {formatSize(result.size)}</div>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 8 }}>
+          <img src={`data:image/${fmt === 'jpeg' ? 'jpeg' : fmt};base64,${result.image}`} alt="" style={{ maxWidth: 200, maxHeight: 120, borderRadius: 6, border: '1px solid var(--line)' }} />
+          <div><div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--bone-dim)', marginBottom: 4 }}>{fmt.toUpperCase()} · {formatSize(result.size)}</div><button className="btn btn-primary" onClick={downloadData}><SvgDownload/> Download</button></div>
         </div>
-      )}
+      </div>)}
     </>
   );
 }
@@ -400,6 +370,7 @@ export default function App() {
   const [jobs, setJobs] = useState([]);
 
   const [job, setJob] = useState(null);
+  const [sourceSizeBytes, setSourceSizeBytes] = useState(0);
   const [step, setStep] = useState(0);
   const [fps, setFps] = useState(24);
   const [trimStart, setTrimStart] = useState(0);
@@ -413,6 +384,10 @@ export default function App() {
   const [result, setResult] = useState(null);
 
   const [uploading, setUploading] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [encoding, setEncoding] = useState(false);
+  const [error, setError] = useState(null);
+
   const loadJobs = useCallback(async () => { try { setJobs(await api.getJobs()); } catch {} }, []);
 
   useEffect(() => {
@@ -420,46 +395,56 @@ export default function App() {
     loadJobs();
   }, [loadJobs]);
 
-  const frameCount = job ? Math.ceil((trimEnd - trimStart) * fps) : 0;
-  const steps = ['Upload', 'Trim & Settings', 'Preview Quality', 'Encode', 'Results'];
+  const frameCount = job ? Math.floor((trimEnd - trimStart) * fps) : 0;
+  const steps = ['Upload', 'Trim & Settings', 'Preview', 'Encode', 'Results'];
 
   const doUpload = async (file) => {
     setUploading(true);
+    setError(null);
     try {
       const data = await api.uploadVideo(file);
       setJob(data);
+      setSourceSizeBytes(data.metadata?.size_bytes || 0);
       setTrimEnd(data.metadata.duration);
       setStep(1);
-    } catch (err) { alert(err.message); }
+    } catch (err) { setError(err.message); }
     setUploading(false);
   };
 
   const doPreview = async () => {
     if (!job) return;
+    setPreviewing(true);
+    setError(null);
     try {
-      setResult(null);
       setPreview(null);
       setSelectedQualityIdx(null);
       const data = await api.runPreview(job.jobId, { fps, trimStart, trimEnd, fmt });
       setPreview(data);
       setStep(2);
-    } catch (err) { alert(err.message); }
+    } catch (err) { setError(err.message); }
+    setPreviewing(false);
   };
 
   const doEncode = async (chosenQuality) => {
     if (!job) return;
+    setEncoding(true);
+    setError(null);
     const q = chosenQuality || quality;
     setStep(3);
     try {
-      const data = await api.runEncode(job.jobId, { fps, trimStart, trimEnd, fmt, quality: q });
+      const data = await api.runEncode(job.jobId, {
+        fps, trimStart, trimEnd, fmt, quality: q, fallback: fallback && fmt !== 'jpeg',
+      });
       setResult(data);
       setStep(4);
       loadJobs();
-    } catch (err) { alert(err.message); setStep(1); }
+    } catch (err) { setError(err.message); setStep(1); }
+    setEncoding(false);
   };
 
   const doRerun = (j) => {
-    setJob({ jobId: j.id, filename: j.source_filename, metadata: { width: j.width, height: j.height, duration: j.duration, fps: j.fps } });
+    setJob({ jobId: j.id, filename: j.source_filename, metadata: { width: j.width, height: j.height, duration: j.duration, fps: j.fps, size_bytes: j.source_size_bytes } });
+    setSourceSizeBytes(j.source_size_bytes || 0);
     setFps(j.fps || 24);
     setTrimStart(j.trim_start || 0);
     setTrimEnd(j.trim_end || j.duration || 0);
@@ -469,7 +454,17 @@ export default function App() {
     setStep(1);
   };
 
-  const resetJob = () => { setJob(null); setStep(0); setPreview(null); setSelectedQualityIdx(null); setResult(null); };
+  const resetJob = () => {
+    setJob(null); setSourceSizeBytes(0); setStep(0); setPreview(null);
+    setSelectedQualityIdx(null); setResult(null); setError(null);
+  };
+
+  useEffect(() => {
+    if (error) {
+      const id = setTimeout(() => setError(null), 6000);
+      return () => clearTimeout(id);
+    }
+  }, [error]);
 
   const statusOk = health?.status === 'ok';
   const ffmpegOK = health?.ffmpeg?.ffmpeg;
@@ -484,9 +479,9 @@ export default function App() {
         </div>
         <nav className="nav-group">
           <span className="nav-label">Workspace</span>
-          <div className={`nav-item ${page === 'new' ? 'active' : ''}`} onClick={() => { setPage('new'); if (!job) resetJob(); else setStep(1); }}><span className="dot" />Frame Extraction</div>
-          <div className={`nav-item ${page === 'image' ? 'active' : ''}`} onClick={() => setPage('image')}><span className="dot" />Image Converter</div>
-          <div className={`nav-item ${page === 'history' ? 'active' : ''}`} onClick={() => setPage('history')}><span className="dot" />Job History</div>
+          <div className={`nav-item ${page === 'new' ? 'active' : ''}`} onClick={() => { setPage('new'); setError(null); }}><span className="dot" />Frame Extraction</div>
+          <div className={`nav-item ${page === 'image' ? 'active' : ''}`} onClick={() => { setPage('image'); setError(null); }}><span className="dot" />Image Converter</div>
+          <div className={`nav-item ${page === 'history' ? 'active' : ''}`} onClick={() => { setPage('history'); setError(null); loadJobs(); }}><span className="dot" />Job History</div>
         </nav>
         <div className="sidebar-footer">
           <div className="status-pip"><span className={`led ${statusOk ? '' : 'error'}`} />{ffmpegOK ? 'ffmpeg ✓' : 'ffmpeg ✗'}{av1OK ? ' · av1 ✓' : ''}</div>
@@ -508,10 +503,11 @@ export default function App() {
 
         <input id="video-input" type="file" accept="video/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); }} />
 
-        {!statusOk && ffmpegOK === false && (<div className="prereq-banner error"><span className="led" />ffmpeg not found — install ffmpeg and ffprobe to use FrameForge</div>)}
+        {!statusOk && ffmpegOK === false && (<div className="prereq-banner error"><span className="led" />ffmpeg not found — install ffmpeg and ffprobe</div>)}
+
+        {error && (<div className="prereq-banner error" style={{ marginBottom: 12 }}><span className="led" />{error}</div>)}
 
         {page === 'image' && <ImageConverter />}
-
         {page === 'history' && <JobHistoryList jobs={jobs} onRerun={doRerun} />}
 
         {page === 'new' && (<>
@@ -519,13 +515,13 @@ export default function App() {
 
           {step === 0 && <Dropzone onFile={doUpload} uploading={uploading} />}
 
-          {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} />}
+          {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} />}
 
-          {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} />}
+          {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} />}
 
-          {step === 3 && job && <ProgressPanel jobId={job.jobId} onDone={() => {}} onError={(msg) => { alert(msg); setStep(1); }} />}
+          {step === 3 && <ProgressPanel jobId={job?.jobId} onDone={() => {}} onError={(msg) => { setError(msg); setStep(1); }} />}
 
-          {step === 4 && result && job && <ResultsPanel result={result} job={job} onReset={resetJob} />}
+          {step === 4 && result && <ResultsPanel result={result} sourceSizeBytes={sourceSizeBytes} onReset={resetJob} />}
         </>)}
       </main>
     </div>

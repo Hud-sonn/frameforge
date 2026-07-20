@@ -85,6 +85,18 @@ async def probe_video(path: str) -> dict:
     }
 
 
+async def extract_frame_at_timestamp(
+    input_path: str,
+    output_path: str,
+    timestamp: float,
+) -> bool:
+    """Extract a single frame at a given timestamp (fast - uses keyframe seek)."""
+    cmd = [FFMPEG, "-y", "-ss", str(timestamp), "-i", input_path, "-vframes", "1", output_path]
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    await proc.wait()
+    return Path(output_path).exists()
+
+
 async def extract_frames(
     input_path: str,
     output_dir: str,
@@ -121,7 +133,10 @@ async def extract_frames(
             if match:
                 frame_count = int(match.group(1))
                 if progress_callback:
-                    await progress_callback(frame_count)
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        await progress_callback(frame_count)
+                    else:
+                        progress_callback(frame_count)
 
     await proc.wait()
     if proc.returncode != 0:
@@ -184,7 +199,10 @@ async def encode_frames(
 
         count += 1
         if progress_callback:
-            await progress_callback(count, total)
+            if asyncio.iscoroutinefunction(progress_callback):
+                await progress_callback(count, total)
+            else:
+                progress_callback(count, total)
 
     return count
 
@@ -236,6 +254,8 @@ def write_manifest(
     width: int,
     height: int,
     source_size: int,
+    fallback_format: str = "",
+    fallback_pattern: str = "",
 ) -> str:
     """Write manifest.json and return its path."""
     ext_map = {"avif": "avif", "jpeg": "jpg", "webp": "webp", "png": "png"}
@@ -264,6 +284,10 @@ def write_manifest(
         "totalSizeBytes": total_size,
         "sourceSizeBytes": source_size,
     }
+
+    if fallback_format:
+        manifest["fallbackFormat"] = fallback_format
+        manifest["fallbackFilenamePattern"] = fallback_pattern
 
     manifest_path = str(Path(output_dir) / "manifest.json")
     Path(manifest_path).write_text(json.dumps(manifest, indent=2))
