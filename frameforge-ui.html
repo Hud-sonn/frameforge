@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FrameForge — Solus Ryuu</title>
+<style>
+  @font-face {
+    font-family: 'Space Grotesk Fallback';
+    src: local('Space Grotesk');
+  }
+
+  :root {
+    --black: #050403;
+    --char: #0d0b09;
+    --panel: #131110;
+    --panel-raised: #181512;
+    --line: rgba(232, 224, 213, 0.08);
+    --line-strong: rgba(232, 224, 213, 0.16);
+    --bone: #E8E0D5;
+    --bone-dim: rgba(232, 224, 213, 0.55);
+    --bone-faint: rgba(232, 224, 213, 0.32);
+    --ember: #C4A35A;
+    --ember-bright: #E0BE72;
+    --ember-dim: rgba(196, 163, 90, 0.35);
+    --ember-glow: rgba(196, 163, 90, 0.18);
+    --forge-red: #8A3B1F;
+    --danger: #B5563A;
+    --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    --display: 'Space Grotesk', 'Space Grotesk Fallback', 'Inter', sans-serif;
+    --body: 'Inter', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--black);
+    color: var(--bone);
+    font-family: var(--body);
+    min-height: 100vh;
+  }
+
+  body {
+    background-image:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(196, 163, 90, 0.07), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 20%, rgba(138, 59, 31, 0.06), transparent 55%);
+    background-attachment: fixed;
+  }
+
+  ::selection { background: var(--ember-dim); color: var(--black); }
+
+  a { color: inherit; }
+
+  /* ---------- Layout shell ---------- */
+
+  .shell {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar ---------- */
+
+  .sidebar {
+    border-right: 1px solid var(--line);
+    padding: 28px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .brand-mark svg { width: 100%; height: 100%; }
+
+  .brand-text {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    line-height: 1.15;
+  }
+
+  .brand-text span {
+    display: block;
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    color: var(--ember);
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  .nav-group { display: flex; flex-direction: column; gap: 2px; }
+
+  .nav-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--bone-faint);
+    padding: 0 10px;
+    margin-bottom: 8px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 6px;
+    font-size: 13.5px;
+    color: var(--bone-dim);
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .nav-item:hover {
+    background: var(--panel);
+    color: var(--bone);
+  }
+
+  .nav-item.active {
+    background: linear-gradient(90deg, rgba(196, 163, 90, 0.12), rgba(196, 163, 90, 0.02));
+    border-color: var(--ember-dim);
+    color: var(--ember-bright);
+  }
+
+  .nav-item .dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor;
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--bone-faint);
+    line-height: 1.6;
+    padding: 12px 10px;
+    border-top: 1px solid var(--line);
+  }
+
+  .status-pip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status-pip .led {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #6FCF97;
+    box-shadow: 0 0 6px #6FCF97;
+  }
+
+  /* ---------- Main ---------- */
+
+  .main {
+    padding: 28px 44px 60px;
+    max-width: 1180px;
+  }
+
+  .page-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .page-head h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 26px;
+    letter-spacing: -0.01em;
+  }
+
+  .page-head .eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ember);
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  .head-actions { display: flex; gap: 10px; }
+
+  /* ---------- Buttons ---------- */
+
+  .btn {
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 7px;
+    border: 1px solid var(--line-strong);
+    background: var(--panel);
+    color: var(--bone);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+  }
+
+  .btn:hover { border-color: var(--ember-dim); background: var(--panel-raised); }
+  .btn:active { transform: translateY(1px); }
+
+  .btn-primary {
+    background: linear-gradient(180deg, var(--ember-bright), var(--ember));
+    color: #1a1408;
+    border-color: transparent;
+    box-shadow: 0 0 0 1px rgba(196,163,90,0.4), 0 6px 20px -6px rgba(196,163,90,0.5);
+  }
+
+  .btn-primary:hover { filter: brightness(1.08); }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--line);
+    color: var(--bone-dim);
+  }
+  .btn-ghost:hover { color: var(--bone); border-color: var(--line-strong); }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .btn:disabled:hover { border-color: var(--line-strong); background: var(--panel); }
+
+  /* ---------- Stepper ---------- */
+
+  .stepper {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 32px;
+  }
+
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--bone-faint);
+  }
+
+  .step .num {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px;
+    color: var(--bone-faint);
+  }
+
+  .step.active .num {
+    border-color: var(--ember);
+    color: var(--ember-bright);
+    background: var(--ember-glow);
+  }
+  .step.active { color: var(--bone); }
+
+  .step.done .num {
+    background: var(--ember);
+    border-color: var(--ember);
+    color: var(--black);
+  }
+  .step.done { color: var(--bone-dim); }
+
+  .step-line {
+    width: 40px;
+    height: 1px;
+    background: var(--line-strong);
+    margin: 0 10px;
+  }
+
+  /* ---------- Card / Panel ---------- */
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 24px;
+  }
+
+  .panel + .panel { margin-top: 20px; }
+
+  .panel-title {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 4px;
+  }
+
+  .panel-sub {
+    font-size: 12.5px;
+    color: var(--bone-dim);
+    margin-bottom: 18px;
+  }
+
+  /* ---------- Upload dropzone ---------- */
+
+  .dropzone {
+    border: 1.5px dashed var(--line-strong);
+    border-radius: 12px;
+    padding: 56px 24px;
+    text-align: center;
+    background:
+      radial-gradient(ellipse 400px 200px at 50% 0%, rgba(196,163,90,0.05), transparent 70%);
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  .dropzone:hover {
+    border-color: var(--ember-dim);
+  }
+
+  .dropzone-icon {
+    width: 44px; height: 44px;
+    margin: 0 auto 16px;
+    color: var(--ember);
+    opacity: 0.85;
+  }
+
+  .dropzone h3 {
+    font-family: var(--display);
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .dropzone p {
+    font-size: 12.5px;
+    color: var(--bone-dim);
+  }
+
+  .dropzone .formats {
+    margin-top: 14px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--bone-faint);
+  }
+
+  /* ---------- Loaded video summary ---------- */
+
+  .video-summary {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    padding: 16px;
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+
+  .video-thumb {
+    width: 96px;
+    height: 60px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #1a1512, #100d0a);
+    flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+
+  .video-thumb::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(120deg, transparent 40%, rgba(196,163,90,0.15) 50%, transparent 60%);
+  }
+
+  .video-thumb svg {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px; height: 20px;
+    color: var(--ember);
+    opacity: 0.9;
+  }
+
+  .video-meta { flex: 1; }
+
+  .video-meta .fname {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--bone);
+    margin-bottom: 6px;
+    word-break: break-all;
+  }
+
+  .meta-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    padding: 4px 8px;
+    border-radius: 5px;
+    background: var(--char);
+    border: 1px solid var(--line);
+    color: var(--bone-dim);
+  }
+
+  .video-summary .btn-ghost { flex-shrink: 0; }
+
+  /* ---------- Timeline / trim ---------- */
+
+  .timeline-wrap { margin-top: 20px; }
+
+  .timeline-frame {
+    position: relative;
+    height: 64px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: repeating-linear-gradient(
+      90deg,
+      #171310, #171310 3.2%,
+      #1c1712 3.2%, #1c1712 6.4%
+    );
+    border: 1px solid var(--line);
+  }
+
+  .trim-region {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 18%;
+    right: 22%;
+    background: linear-gradient(180deg, rgba(196,163,90,0.22), rgba(196,163,90,0.08));
+    border-left: 2px solid var(--ember);
+    border-right: 2px solid var(--ember);
+  }
+
+  .trim-handle {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 12px;
+    background: var(--ember);
+    cursor: ew-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.95;
+  }
+
+  .trim-handle.left { left: calc(18% - 6px); border-radius: 4px 0 0 4px; }
+  .trim-handle.right { left: calc(78% - 6px); border-radius: 0 4px 4px 0; }
+
+  .trim-handle .grip {
+    width: 2px; height: 16px;
+    background: var(--black);
+    border-radius: 1px;
+  }
+
+  .timeline-readout {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--bone-dim);
+  }
+
+  .timeline-readout .highlight { color: var(--ember-bright); }
+
+  /* ---------- Controls grid ---------- */
+
+  .controls-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-top: 22px;
+  }
+
+  .field label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--bone-faint);
+    margin-bottom: 10px;
+  }
+
+  .segmented {
+    display: flex;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .segmented button {
+    flex: 1;
+    padding: 9px 6px;
+    background: var(--char);
+    border: none;
+    border-right: 1px solid var(--line-strong);
+    color: var(--bone-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .segmented button:last-child { border-right: none; }
+
+  .segmented button:hover { background: var(--panel-raised); color: var(--bone); }
+
+  .segmented button.active {
+    background: var(--ember);
+    color: var(--black);
+    font-weight: 600;
+  }
+
+  .field .frame-count-note {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--bone-faint);
+  }
+
+  .field .frame-count-note strong { color: var(--ember-bright); font-weight: 600; }
+
+  .radio-stack { display: flex; flex-direction: column; gap: 6px; }
+
+  .radio-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--char);
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+
+  .radio-row:hover { border-color: var(--line-strong); }
+  .radio-row.selected { border-color: var(--ember-dim); background: var(--ember-glow); }
+
+  .radio-row .rb {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--bone-faint);
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .radio-row.selected .rb { border-color: var(--ember); }
+  .radio-row.selected .rb::after {
+    content: '';
+    position: absolute;
+    inset: 3px;
+    border-radius: 50%;
+    background: var(--ember);
+  }
+
+  .radio-row .rtext { flex: 1; }
+  .radio-row .rtext .rname { font-size: 12.5px; font-weight: 600; }
+  .radio-row .rtext .rnote { font-size: 10.5px; color: var(--bone-faint); margin-top: 1px; }
+
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--bone-dim);
+  }
+
+  .checkbox-row .cb {
+    width: 15px; height: 15px;
+    border-radius: 4px;
+    border: 1.5px solid var(--bone-faint);
+    flex-shrink: 0;
+  }
+
+  .checkbox-row.checked .cb {
+    background: var(--ember);
+    border-color: var(--ember);
+  }
+
+  /* ---------- Quality slider ---------- */
+
+  .quality-slider-wrap { margin-top: 4px; }
+
+  .slider-track {
+    position: relative;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--char);
+    border: 1px solid var(--line);
+  }
+
+  .slider-fill {
+    position: absolute;
+    top: -1px; bottom: -1px; left: -1px;
+    width: 58%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--forge-red), var(--ember));
+  }
+
+  .slider-thumb {
+    position: absolute;
+    top: 50%; left: 58%;
+    transform: translate(-50%, -50%);
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--ember-bright);
+    border: 2px solid var(--black);
+    box-shadow: 0 0 0 1px var(--ember);
+  }
+
+  .slider-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--bone-faint);
+  }
+
+  /* ---------- Preview grid ---------- */
+
+  .preview-grid {
+    display: grid;
+    grid-template-columns: 90px repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .preview-grid .corner {}
+
+  .preview-grid .col-head {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    text-align: center;
+    color: var(--bone-dim);
+    padding: 8px 0;
+    border-radius: 6px;
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+  }
+
+  .preview-grid .col-head.recommended {
+    border-color: var(--ember-dim);
+    color: var(--ember-bright);
+  }
+
+  .preview-grid .row-head {
+    display: flex;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--bone-faint);
+    padding-right: 4px;
+  }
+
+  .preview-cell {
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    background: linear-gradient(135deg, #181310, #0f0c0a);
+    aspect-ratio: 16/10;
+    position: relative;
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .preview-cell:hover { transform: scale(1.015); }
+
+  .preview-cell.selected { border-color: var(--ember); box-shadow: 0 0 0 1px var(--ember); }
+
+  .preview-cell::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 30% 30%, rgba(196,163,90,0.14), transparent 55%),
+      linear-gradient(160deg, rgba(196,163,90,0.06), transparent 40%);
+  }
+
+  .preview-cell .size-tag {
+    position: absolute;
+    bottom: 6px; right: 7px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: rgba(5,4,3,0.75);
+    color: var(--bone);
+    backdrop-filter: blur(4px);
+  }
+
+  .preview-cell .pick-tag {
+    position: absolute;
+    top: 6px; left: 7px;
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: var(--ember);
+    color: var(--black);
+    opacity: 0;
+  }
+
+  .preview-cell.selected .pick-tag { opacity: 1; }
+
+  /* ---------- Progress ---------- */
+
+  .progress-block { text-align: center; padding: 20px 10px 8px; }
+
+  .progress-ring-wrap {
+    width: 120px; height: 120px;
+    margin: 0 auto 20px;
+    position: relative;
+  }
+
+  .progress-ring-wrap svg { transform: rotate(-90deg); }
+
+  .progress-ring-wrap .pct {
+    position: absolute;
+    inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--ember-bright);
+  }
+
+  .progress-status {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--bone-dim);
+    margin-bottom: 4px;
+  }
+
+  .progress-status strong { color: var(--bone); }
+
+  .progress-eta { font-size: 11px; color: var(--bone-faint); }
+
+  .progress-log {
+    margin-top: 20px;
+    text-align: left;
+    background: var(--char);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--bone-faint);
+    max-height: 120px;
+    overflow-y: auto;
+    line-height: 1.8;
+  }
+
+  .progress-log .log-line.done { color: #6FCF97; }
+  .progress-log .log-line.current { color: var(--ember-bright); }
+
+  /* ---------- Results ---------- */
+
+  .results-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  .stat-card {
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  .stat-card .stat-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--bone-faint);
+    margin-bottom: 8px;
+  }
+
+  .stat-card .stat-value {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .stat-card .stat-value.ember { color: var(--ember-bright); }
+  .stat-card .stat-delta {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: #6FCF97;
+    margin-top: 4px;
+  }
+
+  .compare-bar-wrap { margin-top: 4px; }
+  .compare-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .compare-row .clabel {
+    width: 90px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--bone-dim);
+    flex-shrink: 0;
+  }
+  .compare-track {
+    flex: 1;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--char);
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .compare-fill { height: 100%; border-radius: 5px 0 0 5px; }
+  .compare-fill.before { width: 100%; background: linear-gradient(90deg, var(--forge-red), #6b3020); }
+  .compare-fill.after { width: 18%; background: linear-gradient(90deg, var(--ember), var(--ember-bright)); }
+  .compare-row .cval { width: 66px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--bone); flex-shrink: 0; }
+
+  .manifest-block {
+    background: var(--char);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-top: 20px;
+    position: relative;
+  }
+
+  .manifest-block .copy-btn {
+    position: absolute;
+    top: 12px; right: 12px;
+  }
+
+  .manifest-block pre {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: var(--bone-dim);
+    overflow-x: auto;
+  }
+
+  .manifest-block .k { color: var(--ember-bright); }
+  .manifest-block .s { color: #8FBF9F; }
+  .manifest-block .n { color: #C79FDE; }
+
+  /* ---------- Job history ---------- */
+
+  .history-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .history-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 16px;
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    transition: border-color 0.15s ease;
+  }
+
+  .history-row:hover { border-color: var(--line-strong); }
+
+  .history-row .h-icon {
+    width: 34px; height: 34px;
+    border-radius: 7px;
+    background: var(--char);
+    border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ember);
+    flex-shrink: 0;
+  }
+
+  .history-row .h-main { flex: 1; min-width: 0; }
+  .history-row .h-name {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--bone);
+    margin-bottom: 4px;
+  }
+  .history-row .h-sub {
+    font-size: 11px;
+    color: var(--bone-faint);
+    display: flex;
+    gap: 10px;
+  }
+  .history-row .h-sub span::after { content: '·'; margin-left: 10px; color: var(--line-strong); }
+  .history-row .h-sub span:last-child::after { content: ''; }
+
+  .history-row .h-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  .btn-sm { padding: 7px 12px; font-size: 11.5px; }
+
+  /* ---------- Format tradeoff note ---------- */
+
+  .tradeoff-note {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 7px;
+    background: var(--ember-glow);
+    border: 1px solid var(--ember-dim);
+    font-size: 11.5px;
+    color: var(--bone-dim);
+    display: flex;
+    gap: 8px;
+  }
+
+  .tradeoff-note svg { flex-shrink: 0; color: var(--ember); margin-top: 1px; }
+
+  /* ---------- Prereq banner ---------- */
+
+  .prereq-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: rgba(111, 207, 151, 0.08);
+    border: 1px solid rgba(111, 207, 151, 0.25);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #8fd6ab;
+    margin-bottom: 24px;
+  }
+
+  .prereq-banner .led { width: 6px; height: 6px; border-radius: 50%; background: #6FCF97; box-shadow: 0 0 6px #6FCF97; flex-shrink: 0; }
+
+  /* ---------- Utility ---------- */
+
+  .flex-between { display: flex; align-items: center; justify-content: space-between; }
+  .mt-8 { margin-top: 8px; }
+  .mt-16 { margin-top: 16px; }
+  .mt-24 { margin-top: 24px; }
+
+  @media (max-width: 980px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .controls-grid { grid-template-columns: 1fr; }
+    .results-grid { grid-template-columns: repeat(2, 1fr); }
+    .preview-grid { grid-template-columns: 60px repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M16 2 L27 9 V23 L16 30 L5 23 V9 Z" stroke="#C4A35A" stroke-width="1.4" fill="none"/>
+          <path d="M16 8 L21 12 L16 24 L11 12 Z" fill="#C4A35A" opacity="0.85"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        FrameForge
+        <span>Solus Ryuu Tools</span>
+      </div>
+    </div>
+
+    <nav class="nav-group">
+      <span class="nav-label">Workspace</span>
+      <div class="nav-item active"><span class="dot"></span> New Job</div>
+      <div class="nav-item"><span class="dot"></span> Job History</div>
+      <div class="nav-item"><span class="dot"></span> Settings</div>
+    </nav>
+
+    <nav class="nav-group">
+      <span class="nav-label">Reference</span>
+      <div class="nav-item"><span class="dot"></span> Manifest Schema</div>
+      <div class="nav-item"><span class="dot"></span> ffmpeg Log</div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="status-pip"><span class="led"></span> ffmpeg 6.1 · av1 ✓</div>
+      <div style="margin-top:6px;">local · no queue · v0.1</div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+
+    <div class="page-head">
+      <div>
+        <span class="eyebrow">Frame Extraction &amp; Compression</span>
+        <h1>New Job</h1>
+      </div>
+      <div class="head-actions">
+        <button class="btn btn-ghost">Job History</button>
+        <button class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 4V16M12 16L7 11M12 16L17 11M5 20H19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Upload Video
+        </button>
+      </div>
+    </div>
+
+    <div class="prereq-banner">
+      <span class="led"></span>
+      ffmpeg detected · AV1 (libaom) encoder available — AVIF export ready
+    </div>
+
+    <!-- Stepper -->
+    <div class="stepper">
+      <div class="step done"><span class="num">✓</span> Upload</div>
+      <div class="step-line"></div>
+      <div class="step active"><span class="num">2</span> Trim &amp; Settings</div>
+      <div class="step-line"></div>
+      <div class="step"><span class="num">3</span> Preview Quality</div>
+      <div class="step-line"></div>
+      <div class="step"><span class="num">4</span> Encode</div>
+      <div class="step-line"></div>
+      <div class="step"><span class="num">5</span> Results</div>
+    </div>
+
+    <!-- ===== Loaded video summary ===== -->
+    <div class="video-summary">
+      <div class="video-thumb">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M8 5V19L19 12L8 5Z" fill="currentColor"/></svg>
+      </div>
+      <div class="video-meta">
+        <div class="fname">katana-intro.mp4</div>
+        <div class="meta-chips">
+          <span class="chip">6.15s</span>
+          <span class="chip">1920×1080</span>
+          <span class="chip">30fps source</span>
+          <span class="chip">5.6 MB</span>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm">Replace</button>
+    </div>
+
+    <!-- ===== Trim panel ===== -->
+    <div class="panel mt-24">
+      <div class="panel-title">Trim range</div>
+      <div class="panel-sub">Drag the handles to set in/out points. Only the selected range gets extracted.</div>
+
+      <div class="timeline-wrap">
+        <div class="timeline-frame">
+          <div class="trim-region"></div>
+          <div class="trim-handle left"><div class="grip"></div></div>
+          <div class="trim-handle right"><div class="grip"></div></div>
+        </div>
+        <div class="timeline-readout">
+          <span>In: <span class="highlight">0.00s</span></span>
+          <span>Selected: <span class="highlight">4.20s</span> of 6.15s</span>
+          <span>Out: <span class="highlight">4.20s</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Settings panel ===== -->
+    <div class="panel">
+      <div class="panel-title">Extraction &amp; format settings</div>
+      <div class="panel-sub">Lower fps means fewer frames and a lighter sequence with no visible smoothness loss during scroll.</div>
+
+      <div class="controls-grid">
+        <div class="field">
+          <label>Frame rate</label>
+          <div class="segmented">
+            <button>24</button>
+            <button class="active">30</button>
+            <button>60</button>
+          </div>
+          <div class="frame-count-note">→ <strong>126 frames</strong> will be extracted</div>
+        </div>
+
+        <div class="field">
+          <label>Output format</label>
+          <div class="radio-stack">
+            <div class="radio-row selected">
+              <div class="rb"></div>
+              <div class="rtext"><div class="rname">AVIF</div><div class="rnote">Smallest size, needs fallback</div></div>
+            </div>
+            <div class="radio-row">
+              <div class="rb"></div>
+              <div class="rtext"><div class="rname">WebP</div><div class="rnote">Good balance, wide support</div></div>
+            </div>
+            <div class="radio-row">
+              <div class="rb"></div>
+              <div class="rtext"><div class="rname">JPEG</div><div class="rnote">Universal, larger files</div></div>
+            </div>
+          </div>
+          <div class="checkbox-row checked">
+            <div class="cb"></div>
+            Also export JPEG fallback
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Quality (CRF 30)</label>
+          <div class="quality-slider-wrap">
+            <div class="slider-track">
+              <div class="slider-fill"></div>
+              <div class="slider-thumb"></div>
+            </div>
+            <div class="slider-labels">
+              <span>18 · near-lossless</span>
+              <span>40 · aggressive</span>
+            </div>
+          </div>
+          <div class="tradeoff-note">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style="margin-top:2px"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 8V13M12 16.5V16.51" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            AVIF at crf 30 is a strong starting point for motion footage. Run the quality preview before committing to the full batch.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Quality preview panel ===== -->
+    <div class="panel">
+      <div class="flex-between">
+        <div>
+          <div class="panel-title">Quality preview</div>
+          <div class="panel-sub" style="margin-bottom:0;">3 sample frames × 3 quality levels. Pick a column to set the batch quality.</div>
+        </div>
+        <button class="btn btn-ghost btn-sm">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M4 12L10 18L20 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Regenerate preview
+        </button>
+      </div>
+
+      <div class="preview-grid mt-16">
+        <div class="corner"></div>
+        <div class="col-head">crf 24 · high</div>
+        <div class="col-head recommended">crf 30 · recommended</div>
+        <div class="col-head">crf 36 · aggressive</div>
+
+        <div class="row-head">10%<br>opening</div>
+        <div class="preview-cell"><span class="size-tag">142 KB</span></div>
+        <div class="preview-cell selected"><span class="pick-tag">SELECTED</span><span class="size-tag">98 KB</span></div>
+        <div class="preview-cell"><span class="size-tag">61 KB</span></div>
+
+        <div class="row-head">45%<br>mid-motion</div>
+        <div class="preview-cell"><span class="size-tag">168 KB</span></div>
+        <div class="preview-cell selected"><span class="pick-tag">SELECTED</span><span class="size-tag">113 KB</span></div>
+        <div class="preview-cell"><span class="size-tag">72 KB</span></div>
+
+        <div class="row-head">85%<br>slash peak</div>
+        <div class="preview-cell"><span class="size-tag">177 KB</span></div>
+        <div class="preview-cell selected"><span class="pick-tag">SELECTED</span><span class="size-tag">121 KB</span></div>
+        <div class="preview-cell"><span class="size-tag">79 KB</span></div>
+      </div>
+    </div>
+
+    <!-- ===== Progress panel ===== -->
+    <div class="panel">
+      <div class="panel-title">Encoding</div>
+      <div class="panel-sub">Full batch running with the settings confirmed above.</div>
+
+      <div class="progress-block">
+        <div class="progress-ring-wrap">
+          <svg width="120" height="120" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="52" stroke="var(--line)" stroke-width="6" fill="none"/>
+            <circle cx="60" cy="60" r="52" stroke="var(--ember)" stroke-width="6" fill="none"
+              stroke-dasharray="326.7" stroke-dashoffset="98" stroke-linecap="round"/>
+          </svg>
+          <div class="pct">70%</div>
+        </div>
+        <div class="progress-status">Encoding frame <strong>88</strong> of <strong>126</strong></div>
+        <div class="progress-eta">~4s remaining</div>
+
+        <div class="progress-log">
+          <div class="log-line done">✓ extract — 126 frames written (PNG)</div>
+          <div class="log-line done">✓ preview — 9 samples generated</div>
+          <div class="log-line current">→ encode — avif crf 30, frame 88/126</div>
+          <div class="log-line">  manifest — pending</div>
+          <div class="log-line">  cleanup — pending</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Results panel ===== -->
+    <div class="panel">
+      <div class="panel-title">Results</div>
+      <div class="panel-sub">katana-intro · avif · 30fps · crf 30 · completed</div>
+
+      <div class="results-grid">
+        <div class="stat-card">
+          <div class="stat-label">Frames</div>
+          <div class="stat-value">126</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Sequence size</div>
+          <div class="stat-value ember">11.8 MB</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">vs. source video</div>
+          <div class="stat-value">−52%</div>
+          <div class="stat-delta">smaller than 5.6 MB video</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fallback set</div>
+          <div class="stat-value">JPEG</div>
+        </div>
+      </div>
+
+      <div class="compare-bar-wrap">
+        <div class="compare-row">
+          <div class="clabel">Source video</div>
+          <div class="compare-track"><div class="compare-fill before"></div></div>
+          <div class="cval">5.6 MB</div>
+        </div>
+        <div class="compare-row">
+          <div class="clabel">AVIF sequence</div>
+          <div class="compare-track"><div class="compare-fill after"></div></div>
+          <div class="cval">11.8 MB</div>
+        </div>
+      </div>
+
+      <div class="manifest-block">
+        <button class="btn btn-ghost btn-sm copy-btn">Copy path</button>
+        <pre><span class="k">"fps"</span>: <span class="n">30</span>,
+<span class="k">"frameCount"</span>: <span class="n">126</span>,
+<span class="k">"format"</span>: <span class="s">"avif"</span>,
+<span class="k">"quality"</span>: { <span class="k">"crf"</span>: <span class="n">30</span> },
+<span class="k">"basePath"</span>: <span class="s">"/frames/katana-intro/"</span>,
+<span class="k">"filenamePattern"</span>: <span class="s">"frame_%04d.avif"</span>,
+<span class="k">"fallbackFormat"</span>: <span class="s">"jpeg"</span></pre>
+      </div>
+
+      <div class="head-actions mt-16" style="justify-content:flex-end;">
+        <button class="btn btn-ghost">Download .zip</button>
+        <button class="btn btn-primary">Run Another</button>
+      </div>
+    </div>
+
+    <!-- ===== Job history panel ===== -->
+    <div class="panel">
+      <div class="panel-title">Recent jobs</div>
+      <div class="panel-sub">Re-run reuses cached frames — only the encode step runs again.</div>
+
+      <div class="history-list">
+        <div class="history-row">
+          <div class="h-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8 5V19L19 12L8 5Z" fill="currentColor"/></svg>
+          </div>
+          <div class="h-main">
+            <div class="h-name">katana-intro.mp4 → avif · 30fps</div>
+            <div class="h-sub"><span>126 frames</span><span>11.8 MB</span><span>2 min ago</span></div>
+          </div>
+          <div class="h-actions">
+            <button class="btn btn-ghost btn-sm">Re-run</button>
+            <button class="btn btn-ghost btn-sm">Open</button>
+          </div>
+        </div>
+
+        <div class="history-row">
+          <div class="h-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8 5V19L19 12L8 5Z" fill="currentColor"/></svg>
+          </div>
+          <div class="h-main">
+            <div class="h-name">nezuko.mp4 → webp · 24fps</div>
+            <div class="h-sub"><span>84 frames</span><span>6.2 MB</span><span>yesterday</span></div>
+          </div>
+          <div class="h-actions">
+            <button class="btn btn-ghost btn-sm">Re-run</button>
+            <button class="btn btn-ghost btn-sm">Open</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+</body>
+</html>
