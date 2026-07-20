@@ -58,6 +58,19 @@ class JobsManager:
     def _save(self) -> None:
         JOBS_FILE.write_text(json.dumps([j.to_dict() for j in self._jobs.values()], indent=2))
 
+    MAX_JOBS = 100
+
+    def _trim(self) -> None:
+        if len(self._jobs) > self.MAX_JOBS:
+            sorted_jobs = sorted(self._jobs.values(), key=lambda j: j.created_at)
+            for j in sorted_jobs[: len(sorted_jobs) - self.MAX_JOBS]:
+                # Clean up temp/output dirs
+                for d in [j.tmp_dir, j.output_path]:
+                    if d and Path(d).exists():
+                        shutil.rmtree(d, ignore_errors=True)
+                del self._jobs[j.id]
+            self._save()
+
     def create(self, source_filename: str, source_path: str, source_size: int) -> Job:
         job_id = uuid.uuid4().hex[:12]
         now = datetime.now(timezone.utc).isoformat()
@@ -73,6 +86,7 @@ class JobsManager:
         )
         self._jobs[job_id] = job
         self._save()
+        self._trim()
         return job
 
     def get(self, job_id: str) -> Job | None:

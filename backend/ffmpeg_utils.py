@@ -12,6 +12,33 @@ logger = logging.getLogger(__name__)
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
+# Default timeouts (seconds)
+_TIMEOUT_SHORT = 120       # single frame extract, probe, health check
+_TIMEOUT_EXTRACT = 900     # full frame extraction (15 min)
+_TIMEOUT_ENCODE_FRAME = 60  # per-frame encode
+_TIMEOUT_CONVERT = 300     # image conversion
+
+
+async def _run_ffmpeg(
+    cmd: list[str],
+    timeout: float = _TIMEOUT_SHORT,
+) -> tuple[int, bytes, bytes]:
+    """Run ffmpeg/ffprobe with timeout. Returns (returncode, stdout, stderr).
+    Raises RuntimeError on timeout."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        await proc.wait()
+        raise RuntimeError(f"Process timed out after {timeout}s: {' '.join(cmd[:4])}")
+    return proc.returncode, stdout, stderr
+
 
 async def check_ffmpeg() -> dict[str, str | bool]:
     """Check ffmpeg and ffprobe availability. Returns dict with status info."""
@@ -19,25 +46,17 @@ async def check_ffmpeg() -> dict[str, str | bool]:
 
     for binary, key in [(FFMPEG, "ffmpeg"), (FFPROBE, "ffprobe")]:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                binary, "-version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            result[key] = proc.returncode == 0
+            rc, _, _ = await _run_ffmpeg([binary, "-version"])
+            result[key] = rc == 0
         except FileNotFoundError:
+            result[key] = False
+        except RuntimeError:
             result[key] = False
 
     # Check AV1 encoder support (needed for AVIF)
     try:
-        proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-encoders",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        result["av1_encoder"] = b"av1" in stdout.lower()
+        rc, stdout, _ = await _run_ffmpeg([FFMPEG, "-encoders"])
+        result["av1_encoder"] = rc == 0 and b"av1" in stdout.lower()
     except Exception:
         pass
 
@@ -46,19 +65,18 @@ async def check_ffmpeg() -> dict[str, str | bool]:
 
 async def probe_video(path: str) -> dict:
     """Extract video metadata using ffprobe."""
-    proc = await asyncio.create_subprocess_exec(
-        FFPROBE,
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        "-show_streams",
-        path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {stderr.decode()}")
+    try:
+        rc, stdout, stderr = await _run_ffmpeg([
+            FFPROBE, "-v", "quiet",
+            "-print_format", "json",
+            "-show_format", "-show_streams",
+            path,
+        ])
+    except RuntimeError as e:
+        raise RuntimeError(f"ffprobe timed out: {e}")
+
+    if rc != 0:
+        raise RuntimeError(f"ffprobe failed: {stderr.decode(errors='replace')}")
 
     data = json.loads(stdout)
     video_stream = next(
@@ -92,9 +110,11 @@ async def extract_frame_at_timestamp(
 ) -> bool:
     """Extract a single frame at a given timestamp (fast - uses keyframe seek)."""
     cmd = [FFMPEG, "-y", "-ss", str(timestamp), "-i", input_path, "-vframes", "1", output_path]
-    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    await proc.wait()
-    return Path(output_path).exists()
+    try:
+        await _run_ffmpeg(cmd, timeout=_TIMEOUT_SHORT)
+        return Path(output_path).exists()
+    except RuntimeError:
+        return False
 
 
 async def extract_frames(
@@ -123,27 +143,36 @@ async def extract_frames(
     )
 
     frame_count = 0
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        decoded = line.decode().strip()
-        if decoded.startswith("frame="):
-            match = re.search(r"frame=\s*(\d+)", decoded)
-            if match:
-                frame_count = int(match.group(1))
-                if progress_callback:
-                    if asyncio.iscoroutinefunction(progress_callback):
-                        await progress_callback(frame_count)
-                    else:
-                        progress_callback(frame_count)
+    try:
+        while True:
+            line = await asyncio.wait_for(
+                proc.stdout.readline(), timeout=_TIMEOUT_EXTRACT
+            )
+            if not line:
+                break
+            decoded = line.decode().strip()
+            if decoded.startswith("frame="):
+                match = re.search(r"frame=\s*(\d+)", decoded)
+                if match:
+                    frame_count = int(match.group(1))
+                    if progress_callback:
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(frame_count)
+                        else:
+                            progress_callback(frame_count)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        await proc.wait()
+        raise RuntimeError(f"Frame extraction timed out after {_TIMEOUT_EXTRACT}s")
 
     await proc.wait()
     if proc.returncode != 0:
         stderr = await proc.stderr.read()
-        raise RuntimeError(f"ffmpeg extraction failed: {stderr.decode()}")
+        raise RuntimeError(f"ffmpeg extraction failed: {stderr.decode(errors='replace')}")
 
-    # Count actual files written
     png_files = sorted(Path(output_dir).glob("frame_*.png"))
     return len(png_files)
 
@@ -154,57 +183,69 @@ async def encode_frames(
     fmt: str,
     quality: dict,
     progress_callback=None,
+    max_concurrent: int = 2,
 ) -> int:
-    """Encode PNG intermediates to target format. Returns count of encoded files."""
+    """Encode PNG intermediates to target format. Returns count of encoded files.
+    Runs up to `max_concurrent` encodes in parallel for CPU-bound formats."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     png_files = sorted(Path(input_dir).glob("frame_*.png"))
     total = len(png_files)
 
     ext_map = {"avif": "avif", "jpeg": "jpg", "webp": "webp", "png": "png"}
     ext = ext_map.get(fmt, fmt)
-    count = 0
 
-    for i, png in enumerate(png_files):
-        out_name = f"frame_{i+1:04d}.{ext}"
+    sem = asyncio.Semaphore(max_concurrent)
+    completed = 0
+    lock = asyncio.Lock()
+
+    async def _encode_one(png: Path, index: int) -> bool:
+        nonlocal completed
+        out_name = f"frame_{index+1:04d}.{ext}"
         out_path = str(Path(output_dir) / out_name)
 
-        if fmt == "png":
-            # PNG passthrough — just copy
-            shutil.copy2(str(png), out_path)
-        elif fmt == "jpeg":
-            qv = quality.get("qv", 5)
-            cmd = [FFMPEG, "-y", "-i", str(png), "-q:v", str(qv), out_path]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            await proc.wait()
-        elif fmt == "webp":
-            q = quality.get("quality", 80)
-            cmd = [FFMPEG, "-y", "-i", str(png), "-quality", str(q), out_path]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            await proc.wait()
-        elif fmt == "avif":
-            crf = quality.get("crf", 30)
-            cmd = [
-                FFMPEG, "-y", "-i", str(png),
-                "-c:v", "libaom-av1", "-crf", str(crf),
-                "-still-picture", "1", out_path,
-            ]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            await proc.wait()
+        try:
+            async with sem:
+                if fmt == "png":
+                    shutil.copy2(str(png), out_path)
+                elif fmt == "jpeg":
+                    qv = quality.get("qv", 5)
+                    await _run_ffmpeg(
+                        [FFMPEG, "-y", "-i", str(png), "-q:v", str(qv), out_path],
+                        timeout=_TIMEOUT_ENCODE_FRAME,
+                    )
+                elif fmt == "webp":
+                    q = quality.get("quality", 80)
+                    await _run_ffmpeg(
+                        [FFMPEG, "-y", "-i", str(png), "-quality", str(q), out_path],
+                        timeout=_TIMEOUT_ENCODE_FRAME,
+                    )
+                elif fmt == "avif":
+                    crf = quality.get("crf", 30)
+                    await _run_ffmpeg(
+                        [
+                            FFMPEG, "-y", "-i", str(png),
+                            "-c:v", "libaom-av1", "-crf", str(crf),
+                            "-still-picture", "1", out_path,
+                        ],
+                        timeout=_TIMEOUT_ENCODE_FRAME,
+                    )
 
-        count += 1
-        if progress_callback:
-            if asyncio.iscoroutinefunction(progress_callback):
-                await progress_callback(count, total)
-            else:
-                progress_callback(count, total)
+            async with lock:
+                completed += 1
+                if progress_callback:
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        await progress_callback(completed, total)
+                    else:
+                        progress_callback(completed, total)
+            return True
+        except (RuntimeError, FileNotFoundError) as e:
+            logger.warning("Frame %d encode failed: %s", index + 1, e)
+            return False
 
-    return count
+    results = await asyncio.gather(*[
+        _encode_one(png, i) for i, png in enumerate(png_files)
+    ])
+    return sum(1 for r in results if r)
 
 
 async def convert_image(
@@ -234,10 +275,7 @@ async def convert_image(
         elif fmt == "avif":
             crf = quality.get("crf", 30)
             cmd += ["-c:v", "libaom-av1", "-crf", str(crf), "-still-picture", "1", out_path]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        await proc.wait()
+        await _run_ffmpeg(cmd, timeout=_TIMEOUT_CONVERT)
 
     return Path(out_path).stat().st_size
 

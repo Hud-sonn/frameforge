@@ -5,16 +5,17 @@ import base64
 import json
 import os
 import shutil
+import tempfile
 import zipfile
-from io import BytesIO
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 
 from .config import OUTPUT_DIR
 from .ffmpeg_utils import (
+    FFMPEG,
+    _run_ffmpeg,
     check_ffmpeg,
     convert_image,
     encode_frames,
@@ -30,6 +31,9 @@ jobs = JobsManager()
 
 # In-memory progress tracking
 _progress: dict[str, dict] = {}
+
+# Max upload size: 4 GB
+MAX_UPLOAD_SIZE = 4 * 1024 * 1024 * 1024
 
 
 @router.get("/health")
@@ -47,13 +51,19 @@ async def upload(file: UploadFile = File(...)):
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / file.filename
 
+    total_read = 0
     with open(dest, "wb") as f:
         while chunk := await file.read(1024 * 1024):
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"File too large — max {MAX_UPLOAD_SIZE // (1024**3)}GB")
             f.write(chunk)
 
     try:
         meta = await probe_video(str(dest))
     except Exception as e:
+        dest.unlink(missing_ok=True)
         raise HTTPException(400, f"Failed to probe video: {e}")
 
     job = jobs.create(
@@ -109,22 +119,28 @@ async def job_download(job_id: str):
     if not job.output_path or not Path(job.output_path).exists():
         raise HTTPException(404, "Output not found")
 
-    buf = BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        output_dir = Path(job.output_path)
-        for f in sorted(output_dir.iterdir()):
-            if f.is_file():
-                zf.write(f, f.name)
-        manifest = output_dir / "manifest.json"
-        if manifest.exists():
-            zf.write(manifest, "manifest.json")
-    buf.seek(0)
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            output_dir = Path(job.output_path)
+            for f in sorted(output_dir.iterdir()):
+                if f.is_file():
+                    zf.write(f, f.name)
+            manifest = output_dir / "manifest.json"
+            if manifest.exists():
+                zf.write(manifest, "manifest.json")
+        tmp.close()
 
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={job.source_filename.rsplit('.', 1)[0]}-frames.zip"},
-    )
+        filename = f"{job.source_filename.rsplit('.', 1)[0]}-frames.zip"
+        return FileResponse(
+            tmp.name,
+            media_type="application/zip",
+            filename=filename,
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
 
 
 @router.post("/preview")
@@ -192,8 +208,7 @@ async def preview(
                 elif fmt == "avif":
                     cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-still-picture", "1"]
                 cmd.append(str(dst))
-                proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                await proc.wait()
+                await _run_ffmpeg(cmd, timeout=120)
 
         frame_data = []
         for i in extracted_indices:
@@ -417,8 +432,6 @@ async def convert_image_endpoint(
     quality: str = Form('{"qv": 5}'),
     resize: str = Form(""),
 ):
-    import base64
-
     if not file.filename:
         raise HTTPException(400, "No filename provided")
 
@@ -427,8 +440,13 @@ async def convert_image_endpoint(
     ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "png"
     dest = dest_dir / f"convert_{os.urandom(4).hex()}.{ext}"
 
+    total_read = 0
     with open(dest, "wb") as f:
         while chunk := await file.read(1024 * 1024):
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"File too large — max {MAX_UPLOAD_SIZE // (1024**3)}GB")
             f.write(chunk)
 
     quality_dict = json.loads(quality)
@@ -437,6 +455,7 @@ async def convert_image_endpoint(
     try:
         out_size = await convert_image(str(dest), str(output_file), fmt, quality_dict, resize)
     except Exception as e:
+        dest.unlink(missing_ok=True)
         raise HTTPException(500, f"Conversion failed: {e}")
 
     # Return the converted image as base64

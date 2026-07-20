@@ -2,6 +2,20 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import * as api from './api';
 
+function useAbortController() {
+  const ref = useRef(null);
+  const cancel = useCallback(() => {
+    if (ref.current) { ref.current.abort(); ref.current = null; }
+  }, []);
+  const signal = useCallback(() => {
+    cancel();
+    ref.current = new AbortController();
+    return ref.current.signal;
+  }, [cancel]);
+  useEffect(() => cancel, [cancel]);
+  return { signal, cancel };
+}
+
 const FORMATS = [
   { id: 'avif', name: 'AVIF', note: 'Smallest size, needs fallback for older Safari' },
   { id: 'jpeg', name: 'JPEG', note: 'Universal support, larger files' },
@@ -297,14 +311,27 @@ function ImageConverter() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const { signal: abortSignal, cancel: cancelConvert } = useAbortController();
+  const previewUrlRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
 
   const clearFile = useCallback(() => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = null;
     setFile(null); setPreviewUrl(null); setResult(null); setError(null);
   }, []);
 
   const handleFile = useCallback((f) => {
     if (!f.type.startsWith('image/')) { setError('Please select a valid image file'); return; }
-    setFile(f); setPreviewUrl(URL.createObjectURL(f)); setResult(null); setError(null);
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(f);
+    previewUrlRef.current = url;
+    setFile(f); setPreviewUrl(url); setResult(null); setError(null);
   }, []);
 
   const handleDrop = useCallback((e) => {
@@ -317,8 +344,8 @@ function ImageConverter() {
     if (!file) return;
     setConverting(true);
     setError(null);
-    try { setResult(await api.convertImage(file, { fmt, quality, resize })); }
-    catch (e) { setError(e.message); }
+    try { setResult(await api.convertImage(file, { fmt, quality, resize }, abortSignal())); }
+    catch (e) { if (e.name !== 'AbortError') setError(e.message); }
     setConverting(false);
   };
 
@@ -409,6 +436,11 @@ export default function App() {
   const [encoding, setEncoding] = useState(false);
   const [error, setError] = useState(null);
 
+  const abortRef = useRef(null);
+  const cancelRequest = useCallback(() => {
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+  }, []);
+
   const loadJobs = useCallback(async () => { try { setJobs(await api.getJobs()); } catch {} }, []);
 
   useEffect(() => {
@@ -420,46 +452,52 @@ export default function App() {
   const steps = ['Upload', 'Trim & Settings', 'Preview', 'Encode', 'Results'];
 
   const doUpload = async (file) => {
+    cancelRequest();
     setUploading(true);
     setError(null);
+    abortRef.current = new AbortController();
     try {
-      const data = await api.uploadVideo(file);
+      const data = await api.uploadVideo(file, abortRef.current.signal);
       setJob(data);
       setSourceSizeBytes(data.metadata?.size_bytes || 0);
       setTrimEnd(data.metadata.duration);
       setStep(1);
-    } catch (err) { setError(err.message); }
+    } catch (err) { if (err.name !== 'AbortError') setError(err.message); }
     setUploading(false);
   };
 
   const doPreview = async () => {
     if (!job) return;
+    cancelRequest();
     setPreviewing(true);
     setError(null);
+    abortRef.current = new AbortController();
     try {
       setPreview(null);
       setSelectedQualityIdx(null);
-      const data = await api.runPreview(job.jobId, { fps, trimStart, trimEnd, fmt });
+      const data = await api.runPreview(job.jobId, { fps, trimStart, trimEnd, fmt }, abortRef.current.signal);
       setPreview(data);
       setStep(2);
-    } catch (err) { setError(err.message); }
+    } catch (err) { if (err.name !== 'AbortError') setError(err.message); }
     setPreviewing(false);
   };
 
   const doEncode = async (chosenQuality) => {
     if (!job) return;
+    cancelRequest();
     setEncoding(true);
     setError(null);
+    abortRef.current = new AbortController();
     const q = chosenQuality || quality;
     setStep(3);
     try {
       const data = await api.runEncode(job.jobId, {
         fps, trimStart, trimEnd, fmt, quality: q, fallback: fallback && fmt !== 'jpeg',
-      });
+      }, abortRef.current.signal);
       setResult(data);
       setStep(4);
       loadJobs();
-    } catch (err) { setError(err.message); setStep(1); }
+    } catch (err) { if (err.name !== 'AbortError') { setError(err.message); setStep(1); } }
     setEncoding(false);
   };
 
@@ -476,6 +514,7 @@ export default function App() {
   };
 
   const resetJob = () => {
+    cancelRequest();
     setJob(null); setSourceSizeBytes(0); setStep(0); setPreview(null);
     setSelectedQualityIdx(null); setResult(null); setError(null);
   };

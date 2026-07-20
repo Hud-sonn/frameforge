@@ -1,46 +1,63 @@
 const API = '/api';
 
-export async function healthCheck() {
-  const res = await fetch(`${API}/health`);
-  return res.json();
+class AbortError extends Error {
+  constructor() { super('Request cancelled'); this.name = 'AbortError'; }
 }
 
-export async function uploadVideo(file) {
+async function fetchJson(url, opts = {}, signal) {
+  const controller = new AbortController();
+  const combined = signal || controller.signal;
+  if (signal) signal.addEventListener('abort', () => controller.abort(), { once: true });
+
+  const timeout = setTimeout(() => controller.abort(), 900_000); // 15 min timeout
+  try {
+    const res = await fetch(url, { ...opts, signal: combined });
+    clearTimeout(timeout);
+    if (res.status === 413) throw new Error('File too large — max 4GB');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Request failed (${res.status})`);
+    return res.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new AbortError();
+    throw err;
+  }
+}
+
+export { AbortError };
+
+export async function healthCheck(signal) {
+  return fetchJson(`${API}/health`, {}, signal);
+}
+
+export async function uploadVideo(file, signal) {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${API}/upload`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
-  return res.json();
+  return fetchJson(`${API}/upload`, { method: 'POST', body: form }, signal);
 }
 
-export async function getJobs() {
-  const res = await fetch(`${API}/jobs`);
-  return res.json();
+export async function getJobs(signal) {
+  return fetchJson(`${API}/jobs`, {}, signal);
 }
 
-export async function pollJobStatus(jobId) {
-  const res = await fetch(`${API}/jobs/${jobId}/status`);
-  return res.json();
+export async function pollJobStatus(jobId, signal) {
+  return fetchJson(`${API}/jobs/${jobId}/status`, {}, signal);
 }
 
-export async function getManifest(jobId) {
-  const res = await fetch(`${API}/jobs/${jobId}/manifest`);
-  return res.json();
+export async function getManifest(jobId, signal) {
+  return fetchJson(`${API}/jobs/${jobId}/manifest`, {}, signal);
 }
 
-export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt }) {
+export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
   form.append('trimStart', trimStart);
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
-  const res = await fetch(`${API}/preview`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || 'Preview failed');
-  return res.json();
+  return fetchJson(`${API}/preview`, { method: 'POST', body: form }, signal);
 }
 
-export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality }) {
+export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
@@ -48,12 +65,10 @@ export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality }
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
-  const res = await fetch(`${API}/encode`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || 'Encode failed');
-  return res.json();
+  return fetchJson(`${API}/encode`, { method: 'POST', body: form }, signal);
 }
 
-export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality, fallback }) {
+export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality, fallback }, signal) {
   const form = new FormData();
   form.append('fps', fps);
   form.append('trimStart', trimStart);
@@ -61,20 +76,16 @@ export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality, f
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
   form.append('fallback', fallback ? 'true' : 'false');
-  const res = await fetch(`${API}/jobs/${jobId}/rerun`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || 'Re-run failed');
-  return res.json();
+  return fetchJson(`${API}/jobs/${jobId}/rerun`, { method: 'POST', body: form }, signal);
 }
 
-export async function convertImage(file, { fmt, quality, resize }) {
+export async function convertImage(file, { fmt, quality, resize }, signal) {
   const form = new FormData();
   form.append('file', file);
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
   form.append('resize', resize);
-  const res = await fetch(`${API}/convert-image`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || 'Conversion failed');
-  return res.json();
+  return fetchJson(`${API}/convert-image`, { method: 'POST', body: form }, signal);
 }
 
 export function downloadUrl(jobId) {
