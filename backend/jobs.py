@@ -35,6 +35,7 @@ class Job:
     width: int = 0
     height: int = 0
     duration: float = 0.0
+    codec: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

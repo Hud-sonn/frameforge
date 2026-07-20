@@ -67,6 +67,7 @@ async def upload(file: UploadFile = File(...)):
         height=meta["height"],
         duration=meta["duration"],
         fps=meta["fps"],
+        codec=meta["codec"],
         trim_end=meta["duration"],
     )
 
@@ -335,6 +336,7 @@ async def rerun_job(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
     quality: str = Form('{"crf": 30}'),
+    fallback: str = Form("false"),
 ):
     job = jobs.get(job_id)
     if not job:
@@ -345,6 +347,7 @@ async def rerun_job(
     cached_pngs = sorted(tmp_dir.glob("frame_*.png")) if tmp_dir.exists() else []
 
     quality_dict = json.loads(quality)
+    do_fallback = fallback.lower() == "true"
 
     if not cached_pngs:
         # No cache — full extraction needed
@@ -357,6 +360,14 @@ async def rerun_job(
     # Encode
     output_dir = str(OUTPUT_DIR / job_id)
     encoded_count = await encode_frames(job.tmp_dir, output_dir, fmt, quality_dict)
+
+    # JPEG fallback (if requested and primary format is not JPEG)
+    fallback_count = 0
+    fallback_pattern = ""
+    if do_fallback and fmt != "jpeg":
+        fallback_dir = str(OUTPUT_DIR / f"{job_id}_fallback")
+        fallback_count = await encode_frames(job.tmp_dir, fallback_dir, "jpeg", {"qv": 5})
+        fallback_pattern = "frame_%04d.jpg"
 
     # Manifest
     manifest_path = write_manifest(
@@ -371,6 +382,8 @@ async def rerun_job(
         width=job.width,
         height=job.height,
         source_size=job.source_size_bytes,
+        fallback_format="jpeg" if do_fallback and fallback_count > 0 else None,
+        fallback_pattern=fallback_pattern if do_fallback and fallback_count > 0 else None,
     )
 
     total_size = sum(
@@ -378,6 +391,12 @@ async def rerun_job(
         for f in Path(output_dir).iterdir()
         if f.is_file() and f.name != "manifest.json"
     )
+
+    # Include fallback frames in total size
+    if fallback_count > 0:
+        fallback_out = Path(fallback_dir)
+        if fallback_out.exists():
+            total_size += sum(f.stat().st_size for f in fallback_out.iterdir() if f.is_file())
 
     jobs.update(
         job_id,

@@ -53,13 +53,14 @@ export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality }
   return res.json();
 }
 
-export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality }) {
+export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality, fallback }) {
   const form = new FormData();
   form.append('fps', fps);
   form.append('trimStart', trimStart);
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
+  form.append('fallback', fallback ? 'true' : 'false');
   const res = await fetch(`${API}/jobs/${jobId}/rerun`, { method: 'POST', body: form });
   if (!res.ok) throw new Error((await res.json()).detail || 'Re-run failed');
   return res.json();

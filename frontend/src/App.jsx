@@ -101,7 +101,7 @@ function TrimControls({ duration, trimStart, trimEnd, onChange }) {
   );
 }
 
-function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, setFmt, quality, setQuality, fallback, setFallback, frameCount, onPreview, previewing }) {
+function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, setFmt, quality, setQuality, fallback, setFallback, frameCount, onPreview, previewing, av1OK }) {
   return (
     <>
       <div className="panel">
@@ -119,6 +119,7 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
             <label>Format</label>
             <div className="radio-stack">{FORMATS.map(f => (<div key={f.id} className={`radio-row ${fmt === f.id ? 'selected' : ''}`} onClick={() => { setFmt(f.id); setQuality(f.id === 'avif' ? { crf: 30 } : f.id === 'jpeg' ? { qv: 5 } : f.id === 'webp' ? { quality: 80 } : {}); }}><div className="rb"/><div className="rtext"><div className="rname">{f.name}</div><div className="rnote">{f.note}</div></div></div>))}</div>
           </div>
+          {fmt === 'avif' && !av1OK && (<div className="prereq-banner error" style={{ marginBottom: 12, marginTop: -4 }}><span className="led" />AV1 encoder not found — AVIF will fail. Install libaom-av1 or choose another format.</div>)}
           <div className="field">
             <label>Quality</label>
             {fmt === 'avif' && (<div className="segmented">{[24, 30, 36].map(crf => (<button key={crf} className={quality.crf === crf ? 'active' : ''} onClick={() => setQuality({ crf })}>CRF {crf}</button>))}</div>)}
@@ -295,8 +296,22 @@ function ImageConverter() {
   const [converting, setConverting] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [dragging, setDragging] = useState(false);
 
-  const handleFile = useCallback((f) => { setFile(f); setPreviewUrl(URL.createObjectURL(f)); setResult(null); setError(null); }, []);
+  const clearFile = useCallback(() => {
+    setFile(null); setPreviewUrl(null); setResult(null); setError(null);
+  }, []);
+
+  const handleFile = useCallback((f) => {
+    if (!f.type.startsWith('image/')) { setError('Please select a valid image file'); return; }
+    setFile(f); setPreviewUrl(URL.createObjectURL(f)); setResult(null); setError(null);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault(); setDragging(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (f) handleFile(f);
+  }, [handleFile]);
 
   const doConvert = async () => {
     if (!file) return;
@@ -319,13 +334,17 @@ function ImageConverter() {
   return (
     <>
       <div className="panel">
-        <div className={`dropzone`} onClick={() => !file && document.getElementById('img-input')?.click()}
+        <div className={`dropzone ${dragging ? 'dragging' : ''}`}
+          onClick={() => !file && document.getElementById('img-input')?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
           style={{ padding: file ? 16 : 56, cursor: file ? 'default' : 'pointer', border: file ? '1px solid var(--line)' : undefined  }}>
           {!file ? (<><SvgUpload /><h3>Drop an image here</h3><p>or click to browse – PNG, JPEG, WebP, AVIF</p></>) : (
             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
               {previewUrl && <img src={previewUrl} alt="" style={{ width: 80, height: 60, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--line)' }} />}
               <div style={{ flex: 1, textAlign: 'left' }}><div style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--bone)' }}>{file.name}</div><div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--bone-faint)', marginTop: 2 }}>{formatSize(file.size)}</div></div>
-              <button className="btn btn-ghost btn-sm" onClick={() => { setFile(null); setPreviewUrl(null); setResult(null); }}>Remove</button>
+              <button className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); clearFile(); }}>Remove</button>
             </div>
           )}
         </div>
@@ -344,7 +363,9 @@ function ImageConverter() {
           <div className="field"><label>Resize</label><div className="segmented">{['', '1920:-1', '1280:-1', '800:-1', '400:-1'].map(r => (<button key={r || 'none'} className={resize === r ? 'active' : ''} onClick={() => setResize(r)}>{r || 'Original'}</button>))}</div></div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20, gap: 10 }}>
-          <button className="btn btn-primary" onClick={doConvert} disabled={converting}>{converting ? 'Converting…' : 'Convert'}</button>
+          <button className="btn btn-primary" onClick={doConvert} disabled={converting}>
+            {converting && <SvgSpinner/>}{converting ? 'Converting…' : 'Convert'}
+          </button>
         </div>
       </div>)}
 
@@ -352,7 +373,7 @@ function ImageConverter() {
 
       {result && (<div className="panel">
         <div className="panel-title">Conversion Complete</div>
-        <div className="panel-sub">Output: {formatSize(result.size)}</div>
+        <div className="panel-sub">Output: {formatSize(result.size)} {file && <span>(from {formatSize(file.size)})</span>}</div>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 8 }}>
           <img src={`data:image/${fmt === 'jpeg' ? 'jpeg' : fmt};base64,${result.image}`} alt="" style={{ maxWidth: 200, maxHeight: 120, borderRadius: 6, border: '1px solid var(--line)' }} />
           <div><div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--bone-dim)', marginBottom: 4 }}>{fmt.toUpperCase()} · {formatSize(result.size)}</div><button className="btn btn-primary" onClick={downloadData}><SvgDownload/> Download</button></div>
@@ -443,7 +464,7 @@ export default function App() {
   };
 
   const doRerun = (j) => {
-    setJob({ jobId: j.id, filename: j.source_filename, metadata: { width: j.width, height: j.height, duration: j.duration, fps: j.fps, size_bytes: j.source_size_bytes } });
+    setJob({ jobId: j.id, filename: j.source_filename, metadata: { width: j.width, height: j.height, duration: j.duration, fps: j.fps, codec: j.codec || 'unknown', size_bytes: j.source_size_bytes } });
     setSourceSizeBytes(j.source_size_bytes || 0);
     setFps(j.fps || 24);
     setTrimStart(j.trim_start || 0);
@@ -458,6 +479,28 @@ export default function App() {
     setJob(null); setSourceSizeBytes(0); setStep(0); setPreview(null);
     setSelectedQualityIdx(null); setResult(null); setError(null);
   };
+
+  const handleEncodeDone = useCallback(async () => {
+    if (!job) return;
+    try {
+      const st = await api.pollJobStatus(job.jobId);
+      setResult({
+        jobId: job.jobId,
+        status: st.status || 'done',
+        frameCount: st.frame_count || 0,
+        totalSizeBytes: st.total_size_bytes || 0,
+      });
+      setStep(4);
+    } catch {
+      setStep(4);
+    }
+    loadJobs();
+  }, [job, loadJobs]);
+
+  const handleEncodeError = useCallback((msg) => {
+    setError(msg);
+    setStep(1);
+  }, []);
 
   useEffect(() => {
     if (error) {
@@ -515,11 +558,11 @@ export default function App() {
 
           {step === 0 && <Dropzone onFile={doUpload} uploading={uploading} />}
 
-          {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} />}
+          {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} av1OK={av1OK} />}
 
           {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} />}
 
-          {step === 3 && <ProgressPanel jobId={job?.jobId} onDone={() => {}} onError={(msg) => { setError(msg); setStep(1); }} />}
+          {step === 3 && <ProgressPanel jobId={job?.jobId} onDone={handleEncodeDone} onError={handleEncodeError} />}
 
           {step === 4 && result && <ResultsPanel result={result} sourceSizeBytes={sourceSizeBytes} onReset={resetJob} />}
         </>)}
