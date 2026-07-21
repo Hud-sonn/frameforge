@@ -359,6 +359,8 @@ function TrimExport() {
     <div className="panel">
       <div className="panel-title">Quick Trim & Export</div>
       <div className="panel-sub">Trim a video and download raw PNG frames as a ZIP.</div>
+      <input id="trim-input" type="file" accept="video/*" style={{ display: 'none' }}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
       {!file ? (
         <div className={`dropzone ${dragging ? 'dragging' : ''}`}
           onDrop={handleDrop} onDragOver={handleDrag} onDragLeave={() => setDragging(false)}
@@ -368,8 +370,6 @@ function TrimExport() {
       ) : (
         <>
           <div className="file-badge">{file.name} · {formatDuration(duration)}</div>
-          <input id="trim-input" type="file" accept="video/*" style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
           <div className="trim-row">
             <label>Start<output>{formatDuration(trimStart)}</output>
               <input type="range" min="0" max={duration || 1} step="0.1" value={trimStart} onChange={(e) => setTrimStart(Math.min(Number(e.target.value), trimEnd - 0.5))} />
@@ -506,6 +506,8 @@ function CompressPanel() {
     <div className="panel">
       <div className="panel-title">Compress / Convert Video</div>
       <div className="panel-title-sub">Drop a video to reduce size or change format.</div>
+      <input id="compress-input" type="file" accept="video/*" style={{ display: 'none' }}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
       {!file ? (
         <div className={`dropzone ${dragging ? 'dragging' : ''} dropzone-sm`}
           onClick={() => document.getElementById('compress-input')?.click()}
@@ -520,8 +522,6 @@ function CompressPanel() {
             <span>{meta?.filename} · {formatSize(meta?.size)}</span>
             <button className="btn btn-ghost btn-xs" onClick={reset}>Change</button>
           </div>
-          <input id="compress-input" type="file" accept="video/*" style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
           <div className="compress-layout">
             <div className="compress-left">
               <label className="field-label">Format</label>
