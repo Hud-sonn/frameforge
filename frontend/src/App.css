@@ -339,6 +339,16 @@ a { color: inherit; }
   content: ''; position: absolute; inset: 3px;
   border-radius: 50%; background: var(--ember);
 }
+.radio-row.disabled { opacity: 0.45; cursor: not-allowed; }
+.radio-row.disabled:hover { border-color: var(--line); }
+.badge-warn {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--danger);
+  margin-left: 5px;
+  font-weight: 600;
+}
 .radio-row .rtext { flex: 1; }
 .radio-row .rtext .rname { font-size: 12.5px; font-weight: 600; }
 .radio-row .rtext .rnote { font-size: 10.5px; color: var(--bone-faint); margin-top: 1px; }

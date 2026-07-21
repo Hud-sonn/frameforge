@@ -131,7 +131,10 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
           </div>
           <div className="field">
             <label>Format</label>
-            <div className="radio-stack">{FORMATS.map(f => (<div key={f.id} className={`radio-row ${fmt === f.id ? 'selected' : ''}`} onClick={() => { setFmt(f.id); setQuality(f.id === 'avif' ? { crf: 30 } : f.id === 'jpeg' ? { qv: 5 } : f.id === 'webp' ? { quality: 80 } : {}); }}><div className="rb"/><div className="rtext"><div className="rname">{f.name}</div><div className="rnote">{f.note}</div></div></div>))}</div>
+            <div className="radio-stack">{FORMATS.map(f => {
+              const disabled = f.id === 'avif' && !av1OK;
+              return (<div key={f.id} className={`radio-row ${fmt === f.id ? 'selected' : ''} ${disabled ? 'disabled' : ''}`} onClick={() => { if (!disabled) { setFmt(f.id); setQuality(f.id === 'avif' ? { crf: 30 } : f.id === 'jpeg' ? { qv: 5 } : f.id === 'webp' ? { quality: 80 } : {}); } }}><div className="rb"/><div className="rtext"><div className="rname">{f.name}{disabled && <span className="badge-warn">unavailable</span>}</div><div className="rnote">{disabled ? 'AV1 encoder not found' : f.note}</div></div></div>);
+            })}</div>
           </div>
           {fmt === 'avif' && !av1OK && (<div className="prereq-banner error" style={{ marginBottom: 12, marginTop: -4 }}><span className="led" />AV1 encoder not found — AVIF will fail. Install libaom-av1 or choose another format.</div>)}
           <div className="field">
@@ -145,7 +148,7 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
           </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
-          <button className="btn btn-primary" onClick={onPreview} disabled={previewing}>
+          <button className="btn btn-primary" onClick={onPreview} disabled={previewing || (fmt === 'avif' && !av1OK)} title={fmt === 'avif' && !av1OK ? 'AV1 encoder unavailable' : ''}>
             {previewing && <SvgSpinner/>}{previewing ? 'Extracting samples…' : 'Preview Quality'}
           </button>
         </div>
