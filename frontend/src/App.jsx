@@ -420,7 +420,7 @@ function CompressPanel() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [dragging, setDragging] = useState(false);
-  const [stage, setStage] = useState('idle'); // idle | compressing | done
+  const [stage, setStage] = useState('idle');
   const [progress, setProgress] = useState({ current: 0, total: 100 });
   const progressRef = useRef(null);
   const sourceExt = meta ? '.' + (meta.filename?.split('.').pop() || 'mp4') : '.mp4';
@@ -429,13 +429,13 @@ function CompressPanel() {
     return () => { if (progressRef.current) clearInterval(progressRef.current); };
   }, []);
 
-  const handleFile = async (f) => {
+  const handleFile = (f) => {
     if (!f.type.startsWith('video/')) { setError('Please select a video file'); return; }
-    setError(null);
-    setResult(null);
-    setFile(f);
-    setMeta({ filename: f.name, size: f.size });
+    setError(null); setResult(null);
+    setFile(f); setMeta({ filename: f.name, size: f.size });
   };
+
+  const reset = () => { setFile(null); setMeta(null); setResult(null); setError(null); setStage('idle'); };
 
   const pollProgress = (jobId) => {
     progressRef.current = setInterval(async () => {
@@ -444,23 +444,19 @@ function CompressPanel() {
         const p = st.progress || {};
         setProgress(p);
         if (p.stage === 'done' || st.status === 'done') {
-          clearInterval(progressRef.current);
-          progressRef.current = null;
+          clearInterval(progressRef.current); progressRef.current = null;
           const outExt = format || (st.source_filename?.split('.').pop() || 'mp4');
           setResult({
-            jobId,
-            status: 'done',
+            jobId, status: 'done',
             sourceSizeBytes: st.source_size_bytes || 0,
             outputSizeBytes: st.total_size_bytes || 0,
-            outputFilename: st.source_filename ? st.source_filename.replace(/\.[^.]+$/, '') + '-compressed.' + outExt : 'compressed.' + outExt,
+            outputFilename: (st.source_filename?.replace(/\.[^.]+$/, '') || 'video') + '-compressed.' + outExt,
           });
-          setStage('done');
+          setStage('done'); setCompressing(false);
         }
         if (st.status === 'failed') {
-          clearInterval(progressRef.current);
-          progressRef.current = null;
-          setError('Compression failed');
-          setStage('idle');
+          clearInterval(progressRef.current); progressRef.current = null;
+          setError('Compression failed'); setStage('idle'); setCompressing(false);
         }
       } catch {}
     }, 800);
@@ -468,125 +464,100 @@ function CompressPanel() {
 
   const doCompress = async () => {
     if (!file) return;
-    setCompressing(true);
-    setError(null);
-    setStage('compressing');
-    setProgress({ current: 0, total: 100 });
+    setCompressing(true); setError(null); setStage('compressing'); setProgress({ current: 0, total: 100 });
     try {
       const data = await api.compressVideo(file, { format, crf, preset, keepAudio });
       pollProgress(data.jobId);
     } catch (e) {
       if (e.name !== 'AbortError') setError(e.message);
-      setStage('idle');
-      setCompressing(false);
+      setStage('idle'); setCompressing(false);
     }
   };
 
   const pct = progress.total > 0 ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : 0;
-  const reduction = result ? (((result.sourceSizeBytes - result.outputSizeBytes) / result.sourceSizeBytes) * 100).toFixed(1) : 0;
+  const reduction = result && result.sourceSizeBytes > 0 ? (((result.sourceSizeBytes - result.outputSizeBytes) / result.sourceSizeBytes) * 100).toFixed(1) : 0;
   const saved = result ? result.sourceSizeBytes - result.outputSizeBytes : 0;
 
-  return (
-    <>
+  if (stage === 'done' && result) {
+    return (
       <div className="panel">
-        <div className="panel-title">Compress / Convert Video</div>
-        <div className="panel-sub">Reduce file size or change format while keeping audio.</div>
-        {!file ? (
-          <div className={`dropzone ${dragging ? 'dragging' : ''}`}
-            onClick={() => document.getElementById('compress-input')?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer?.files?.[0]; if (f) handleFile(f); }}>
-            <SvgUpload />
-            <h3>Drop a video file here</h3>
-            <p>or click to browse – MP4, MOV, MKV, WEBM</p>
-            <div className="formats">MP4 · MOV · MKV · WEBM</div>
-          </div>
-        ) : (
-          <>
-            {meta && <div className="file-badge">{meta.filename} · {formatSize(meta.size)}</div>}
-            <input id="compress-input" type="file" accept="video/*" style={{ display: 'none' }}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-            <div className="controls-grid">
-              <div className="field">
-                <label>Output Format</label>
-                <div className="radio-stack">{COMPRESS_FORMATS.map(f => {
-                  const label = f.id ? f.name : `Keep original (${sourceExt})`;
-                  return (
-                  <div key={f.id} className={`radio-row ${format === f.id ? 'selected' : ''}`} onClick={() => setFormat(f.id)}>
-                    <div className="rb" />
-                    <div className="rtext"><div className="rname">{label}</div><div className="rnote">{f.note}</div></div>
-                  </div>
-                  );
-                })}</div>
-              </div>
-              <div className="field">
-                <label>Compression</label>
-                <div className="radio-stack">{PRESETS.map(p => (
-                  <div key={p.id} className={`radio-row ${preset === p.id ? 'selected' : ''}`} onClick={() => setPreset(p.id)}>
-                    <div className="rb" />
-                    <div className="rtext"><div className="rname">{p.name}</div><div className="rnote">{p.note}</div></div>
-                  </div>
-                ))}</div>
-                <div className="crf-row">
-                  <label>Quality (CRF): <strong>{crf}</strong></label>
-                  <input type="range" min="18" max="51" value={crf} onChange={(e) => setCrf(Number(e.target.value))}
-                    style={{ width: '100%', accentColor: 'var(--ember)' }} />
-                  <div className="crf-labels"><span>Better</span><span>Smaller</span></div>
-                </div>
-              </div>
-            </div>
-            <div className="checkbox-row" onClick={() => setKeepAudio(!keepAudio)}>
-              <div className={`cb ${keepAudio ? 'checked' : ''}`}>{keepAudio && <SvgCheck />}</div>
-              Keep audio track
-            </div>
-            {error && <div className="prereq-banner error" style={{ marginTop: 12 }}><span className="led" />{error}</div>}
-            {stage !== 'done' ? (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
-                <button className="btn btn-primary" onClick={doCompress} disabled={compressing}>
-                  {compressing && <SvgSpinner />}{compressing ? 'Compressing…' : 'Compress Video'}
-                </button>
-              </div>
-            ) : null}
-          </>
-        )}
-      </div>
-      {stage === 'compressing' && (
-        <div className="panel">
-          <div className="progress-block">
-            <div className="progress-ring-wrap">
-              <svg width="120" height="120" viewBox="0 0 120 120">
-                <circle cx="60" cy="60" r="50" fill="none" stroke="var(--line)" strokeWidth="6" />
-                <circle cx="60" cy="60" r="50" fill="none" stroke="var(--ember)" strokeWidth="6"
-                  strokeDasharray={2 * Math.PI * 50} strokeDashoffset={2 * Math.PI * 50 * (1 - pct / 100)}
-                  strokeLinecap="round" style={{ transition: 'stroke-dashoffset 0.3s ease' }} />
-              </svg>
-              <div className="pct">{pct}%</div>
-            </div>
-            <div className="progress-status"><strong>Compressing video…</strong></div>
-          </div>
+        <div className="panel-title">Compression Complete</div>
+        <div className="panel-title-sub">{result.outputFilename}</div>
+        <div className="results-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+          <div className="stat-card"><div className="stat-label">Source</div><div className="stat-value">{formatSize(result.sourceSizeBytes)}</div></div>
+          <div className="stat-card"><div className="stat-label">Output</div><div className="stat-value ember">{formatSize(result.outputSizeBytes)}</div></div>
+          <div className="stat-card"><div className="stat-label">Reduction</div><div className="stat-value ember">{reduction}%</div>{saved > 0 && <div className="stat-delta">–{formatSize(saved)}</div>}</div>
         </div>
-      )}
-      {stage === 'done' && result && (
-        <div className="panel">
-          <div className="panel-title">Compression Complete</div>
-          <div className="panel-sub">{result.outputFilename}</div>
-          <div className="results-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-            <div className="stat-card"><div className="stat-label">Source Size</div><div className="stat-value">{formatSize(result.sourceSizeBytes)}</div></div>
-            <div className="stat-card"><div className="stat-label">Output Size</div><div className="stat-value ember">{formatSize(result.outputSizeBytes)}</div></div>
-            <div className="stat-card"><div className="stat-label">Reduction</div><div className="stat-value ember">{reduction}%</div>{saved > 0 && <div className="stat-delta">Saved {formatSize(saved)}</div>}</div>
-          </div>
-          {result.sourceSizeBytes > 0 && (<div className="compare-bar-wrap">
+        {result.sourceSizeBytes > 0 && (
+          <div className="compare-bar-wrap">
             <div className="compare-row"><span className="clabel">Source</span><div className="compare-track"><div className="compare-fill before" /></div><span className="cval">{formatSize(result.sourceSizeBytes)}</span></div>
-            <div className="compare-row"><span className="clabel">Output</span><div className="compare-track"><div className="compare-fill after" style={{ width: `${Math.min(100, Number((result.outputSizeBytes / result.sourceSizeBytes) * 100))}%` }} /></div><span className="cval">{formatSize(result.outputSizeBytes)}</span></div>
-          </div>)}
-          <div className="head-actions mt-16" style={{ justifyContent: 'flex-end' }}>
-            <a className="btn btn-ghost" href={api.compressedUrl(result.jobId)} download><SvgDownload /> Download</a>
-            <button className="btn btn-primary" onClick={() => { setFile(null); setMeta(null); setResult(null); setError(null); setStage('idle'); }}>Compress Another</button>
+            <div className="compare-row"><span className="clabel">Output</span><div className="compare-track"><div className="compare-fill after" style={{ width: `${Math.min(100, (result.outputSizeBytes / result.sourceSizeBytes) * 100)}%` }} /></div><span className="cval">{formatSize(result.outputSizeBytes)}</span></div>
           </div>
+        )}
+        <div className="head-actions mt-16" style={{ justifyContent: 'flex-end' }}>
+          <a className="btn btn-ghost" href={api.compressedUrl(result.jobId)} download><SvgDownload /> Download</a>
+          <button className="btn btn-primary" onClick={reset}>Compress Another</button>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-title">Compress / Convert Video</div>
+      <div className="panel-title-sub">Drop a video to reduce size or change format.</div>
+      {!file ? (
+        <div className={`dropzone ${dragging ? 'dragging' : ''} dropzone-sm`}
+          onClick={() => document.getElementById('compress-input')?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer?.files?.[0]; if (f) handleFile(f); }}>
+          <SvgUpload /><h3>Drop a video file here</h3><p>or click to browse – MP4, MOV, MKV, WEBM</p>
+        </div>
+      ) : (
+        <>
+          <div className="file-badge">
+            <span>{meta?.filename} · {formatSize(meta?.size)}</span>
+            <button className="btn btn-ghost btn-xs" onClick={reset}>Change</button>
+          </div>
+          <input id="compress-input" type="file" accept="video/*" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+          <div className="compress-layout">
+            <div className="compress-left">
+              <label className="field-label">Format</label>
+              <div className="segmented">{COMPRESS_FORMATS.map(f => {
+                const label = f.id ? f.name : `Original (${sourceExt})`;
+                return <button key={f.id} className={format === f.id ? 'active' : ''} onClick={() => setFormat(f.id)} title={f.note}>{label}</button>;
+              })}</div>
+              <label className="field-label mt-12">Preset</label>
+              <div className="segmented">{PRESETS.map(p => (
+                <button key={p.id} className={preset === p.id ? 'active' : ''} onClick={() => setPreset(p.id)} title={p.note}>{p.name}</button>
+              ))}</div>
+            </div>
+            <div className="compress-right">
+              <label className="field-label">CRF: <strong>{crf}</strong></label>
+              <input type="range" min="18" max="51" value={crf} onChange={(e) => setCrf(Number(e.target.value))} />
+              <div className="crf-labels"><span>Better</span><span>Smaller</span></div>
+              <div className="checkbox-row mt-12" onClick={() => setKeepAudio(!keepAudio)}>
+                <div className={`cb ${keepAudio ? 'checked' : ''}`}>{keepAudio && <SvgCheck />}</div>Audio
+              </div>
+            </div>
+          </div>
+          {stage === 'compressing' && (
+            <div className="compress-progress">
+              <div className="compress-progress-track"><div className="compress-progress-fill" style={{ width: `${pct}%` }} /></div>
+              <span className="compress-progress-label">{pct}% · Compressing…</span>
+            </div>
+          )}
+          {error && <div className="prereq-banner error" style={{ marginTop: 8 }}><span className="led" />{error}</div>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <button className="btn btn-primary" onClick={doCompress} disabled={compressing}>
+              {compressing ? <SvgSpinner /> : null}{compressing ? 'Compressing…' : 'Compress'}
+            </button>
+          </div>
+        </>
       )}
-    </>
+    </div>
   );
 }
 
