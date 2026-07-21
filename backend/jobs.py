@@ -43,6 +43,7 @@ class Job:
 
 class JobsManager:
     def __init__(self) -> None:
+        self._lock = asyncio.Lock()
         self._jobs: dict[str, Job] = {}
         self._load()
 
@@ -55,23 +56,31 @@ class JobsManager:
             except Exception:
                 logger.warning("Failed to load jobs index, starting fresh")
 
-    def _save(self) -> None:
-        JOBS_FILE.write_text(json.dumps([j.to_dict() for j in self._jobs.values()], indent=2))
+    async def _save(self) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                JOBS_FILE.write_text,
+                json.dumps([j.to_dict() for j in self._jobs.values()], indent=2),
+            )
 
     MAX_JOBS = 100
 
-    def _trim(self) -> None:
+    # Callback invoked with (job_id,) when a job is trimmed — used by routes.py to clean _progress
+    on_trim: list[callable] = []
+
+    async def _trim(self) -> None:
         if len(self._jobs) > self.MAX_JOBS:
             sorted_jobs = sorted(self._jobs.values(), key=lambda j: j.created_at)
             for j in sorted_jobs[: len(sorted_jobs) - self.MAX_JOBS]:
-                # Clean up temp/output dirs
                 for d in [j.tmp_dir, j.output_path]:
                     if d and Path(d).exists():
                         shutil.rmtree(d, ignore_errors=True)
+                for cb in self.on_trim:
+                    cb(j.id)
                 del self._jobs[j.id]
-            self._save()
+            await self._save()
 
-    def create(self, source_filename: str, source_path: str, source_size: int) -> Job:
+    async def create(self, source_filename: str, source_path: str, source_size: int) -> Job:
         job_id = uuid.uuid4().hex[:12]
         now = datetime.now(timezone.utc).isoformat()
         tmp_dir = str(Path.home() / ".frameforge" / "tmp" / job_id)
@@ -85,21 +94,21 @@ class JobsManager:
             source_size_bytes=source_size,
         )
         self._jobs[job_id] = job
-        self._save()
-        self._trim()
+        await self._save()
+        await self._trim()
         return job
 
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def update(self, job_id: str, **kwargs) -> Job | None:
+    async def update(self, job_id: str, **kwargs) -> Job | None:
         job = self._jobs.get(job_id)
         if not job:
             return None
         for k, v in kwargs.items():
             if hasattr(job, k):
                 setattr(job, k, v)
-        self._save()
+        await self._save()
         return job
 
     def list_all(self) -> list[Job]:

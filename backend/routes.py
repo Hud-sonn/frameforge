@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import shutil
 import tempfile
+import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .config import OUTPUT_DIR
@@ -17,17 +20,26 @@ from .ffmpeg_utils import (
     FFMPEG,
     _run_ffmpeg,
     check_ffmpeg,
+    compress_video,
     convert_image,
     encode_frames,
     extract_frame_at_timestamp,
     extract_frames,
     probe_video,
+    resolve_source_extension,
     write_manifest,
 )
 from .jobs import JobsManager
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 jobs = JobsManager()
+
+def _clean_progress(job_id: str) -> None:
+    _progress.pop(job_id, None)
+
+jobs.on_trim.append(_clean_progress)
 
 # In-memory progress tracking
 _progress: dict[str, dict] = {}
@@ -47,9 +59,10 @@ async def upload(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(400, "No filename provided")
 
+    safe_name = Path(file.filename).name
     dest_dir = Path.home() / ".frameforge" / "uploads"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / file.filename
+    dest = dest_dir / safe_name
 
     total_read = 0
     with open(dest, "wb") as f:
@@ -66,12 +79,12 @@ async def upload(file: UploadFile = File(...)):
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"Failed to probe video: {e}")
 
-    job = jobs.create(
+    job = await jobs.create(
         source_filename=file.filename,
         source_path=str(dest),
         source_size=meta["size_bytes"],
     )
-    jobs.update(
+    await jobs.update(
         job.id,
         width=meta["width"],
         height=meta["height"],
@@ -81,11 +94,128 @@ async def upload(file: UploadFile = File(...)):
         trim_end=meta["duration"],
     )
 
+    # Extract a real thumbnail frame
+    thumb = None
+    if meta["duration"] > 0:
+        thumb_path = Path(job.tmp_dir) / "thumb.jpg"
+        ok = await extract_frame_at_timestamp(str(dest), str(thumb_path), meta["duration"] * 0.1)
+        if ok and thumb_path.exists():
+            thumb = base64.b64encode(thumb_path.read_bytes()).decode()
+
     return {
         "jobId": job.id,
         "filename": file.filename,
         "metadata": meta,
+        "thumbnail": thumb,
     }
+
+
+@router.post("/compress")
+async def compress(
+    file: UploadFile = File(...),
+    format: str = Form(""),        # empty string = same as source
+    crf: int = Form(23),
+    preset: str = Form("medium"),
+    keepAudio: str = Form("true"),
+):
+    if not file.filename:
+        raise HTTPException(400, "No filename provided")
+
+    safe_name = Path(file.filename).name
+    dest_dir = Path.home() / ".frameforge" / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"compress_{os.urandom(4).hex()}_{safe_name}"
+
+    total_read = 0
+    with open(dest, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"File too large — max {MAX_UPLOAD_SIZE // (1024**3)}GB")
+            f.write(chunk)
+
+    try:
+        meta = await probe_video(str(dest))
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, f"Failed to probe video: {e}")
+
+    # Create a proper job entry in JobsManager for progress polling
+    source_ext = resolve_source_extension(file.filename, meta.get("format_name", ""))
+    job = await jobs.create(source_filename=file.filename, source_path=str(dest), source_size=meta["size_bytes"])
+    await jobs.update(
+        job.id,
+        status="compressing",
+        width=meta["width"],
+        height=meta["height"],
+        duration=meta["duration"],
+        fps=meta["fps"],
+        codec=meta["codec"],
+        format=format.strip() or meta.get("format_name", ""),
+    )
+
+    _progress[job.id] = {"stage": "compressing", "current": 0, "total": 100}
+
+    async def _compress_progress(c, t):
+        _progress.update({job.id: {"stage": "compressing", "current": c, "total": t}})
+
+    async def _run_compress():
+        try:
+            out_path, out_size = await compress_video(
+                source_path=str(dest),
+                output_path=str(Path(job.tmp_dir) / "compressed"),
+                target_format=format.strip() or None,
+                crf=crf,
+                preset=preset,
+                keep_audio=keepAudio.lower() == "true",
+                source_extension=source_ext,
+                source_codec=meta.get("codec", "h264"),
+                progress_callback=_compress_progress,
+            )
+            out_ext = Path(out_path).suffix.lstrip(".")
+            await jobs.update(
+                job.id,
+                status="done",
+                total_size_bytes=out_size,
+                output_path=str(Path(job.tmp_dir) / "compressed"),
+            )
+            _progress[job.id] = {"stage": "done", "current": 100, "total": 100}
+        except Exception as e:
+            await jobs.update(job.id, status="failed")
+            logger.error("Compression failed: %s", e)
+        finally:
+            Path(dest).unlink(missing_ok=True)
+
+    asyncio.create_task(_run_compress())
+
+    return {
+        "jobId": job.id,
+        "status": "compressing",
+        "sourceSizeBytes": meta.get("size_bytes", 0),
+        "sourceFilename": file.filename,
+    }
+
+
+@router.get("/jobs/{job_id}/compressed")
+async def compressed_download(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "done":
+        raise HTTPException(400, "Compression not yet complete")
+    tmp_dir = Path(job.tmp_dir)
+    candidates = list(tmp_dir.glob("compressed.*"))
+    if not candidates:
+        raise HTTPException(404, "Compressed output not found")
+    out_path = str(candidates[0])
+    out_name = Path(out_path).name
+    return FileResponse(
+        out_path,
+        media_type="application/octet-stream",
+        filename=out_name,
+        headers={"Content-Disposition": f"attachment; filename={out_name}"},
+    )
 
 
 @router.get("/jobs")
@@ -111,8 +241,15 @@ async def job_manifest(job_id: str):
     return json.loads(Path(job.manifest_path).read_text())
 
 
+def _cleanup_temp(path: str) -> None:
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 @router.get("/jobs/{job_id}/download")
-async def job_download(job_id: str):
+async def job_download(job_id: str, bg: BackgroundTasks):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
@@ -130,6 +267,8 @@ async def job_download(job_id: str):
             if manifest.exists():
                 zf.write(manifest, "manifest.json")
         tmp.close()
+
+        bg.add_task(_cleanup_temp, tmp.name)
 
         filename = f"{job.source_filename.rsplit('.', 1)[0]}-frames.zip"
         return FileResponse(
@@ -244,12 +383,13 @@ async def encode(
 
     quality_dict = json.loads(quality)
     do_fallback = fallback.lower() == "true"
-    jobs.update(jobId, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
+    await jobs.update(jobId, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
 
-    _progress[jobId] = {"stage": "extract", "current": 0, "total": 0}
+    expected_total = max(1, int((trimEnd - trimStart) * fps))
+    _progress[jobId] = {"stage": "extract", "current": 0, "total": expected_total}
 
     async def _extract_progress(c):
-        _progress.update({jobId: {"stage": "extract", "current": c, "total": 0}})
+        _progress.update({jobId: {"stage": "extract", "current": c, "total": expected_total}})
 
     # Step 1: Extract PNG intermediates
     try:
@@ -262,41 +402,47 @@ async def encode(
             progress_callback=_extract_progress,
         )
     except Exception as e:
-        jobs.update(jobId, status="failed")
+        await jobs.update(jobId, status="failed")
+        _progress.pop(jobId, None)
         raise HTTPException(500, f"Extraction failed: {e}")
 
     # Step 2: Encode
-    jobs.update(jobId, status="encoding")
+    await jobs.update(jobId, status="encoding")
     output_dir = str(OUTPUT_DIR / jobId)
     _progress[jobId] = {"stage": "encode", "current": 0, "total": frame_count}
 
     async def _encode_progress(c, t):
         _progress.update({jobId: {"stage": "encode", "current": c, "total": t}})
 
+    failed_frames = []
     try:
-        encoded_count = await encode_frames(
+        encoded_count, failures = await encode_frames(
             job.tmp_dir,
             output_dir,
             fmt,
             quality_dict,
             progress_callback=_encode_progress,
         )
+        failed_frames.extend(failures)
 
         # Step 2b: JPEG fallback (if requested and primary format is not JPEG)
         fallback_count = 0
         fallback_pattern = ""
         if do_fallback and fmt != "jpeg":
             fallback_dir = str(OUTPUT_DIR / f"{jobId}_fallback")
-            fallback_count = await encode_frames(
+            fc, fb_failures = await encode_frames(
                 job.tmp_dir,
                 fallback_dir,
                 "jpeg",
                 {"qv": 5},
                 progress_callback=_encode_progress,
             )
+            fallback_count = fc
+            failed_frames.extend([f"fallback_{i}" for i in fb_failures])
             fallback_pattern = "frame_%04d.jpg"
     except Exception as e:
-        jobs.update(jobId, status="failed")
+        await jobs.update(jobId, status="failed")
+        _progress.pop(jobId, None)
         raise HTTPException(500, f"Encoding failed: {e}")
 
     # Step 3: Write manifest
@@ -323,7 +469,7 @@ async def encode(
         if f.is_file() and f.name != "manifest.json"
     )
 
-    jobs.update(
+    await jobs.update(
         jobId,
         status="done",
         frame_count=encoded_count,
@@ -365,23 +511,23 @@ async def rerun_job(
     do_fallback = fallback.lower() == "true"
 
     if not cached_pngs:
-        # No cache — full extraction needed
-        jobs.update(job_id, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
+        await jobs.update(job_id, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
         frame_count = await extract_frames(job.source_path, job.tmp_dir, fps, trimStart, trimEnd)
     else:
         frame_count = len(cached_pngs)
-        jobs.update(job_id, status="encoding", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
+        await jobs.update(job_id, status="encoding", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
 
     # Encode
     output_dir = str(OUTPUT_DIR / job_id)
-    encoded_count = await encode_frames(job.tmp_dir, output_dir, fmt, quality_dict)
+    encoded_count, _ = await encode_frames(job.tmp_dir, output_dir, fmt, quality_dict)
 
     # JPEG fallback (if requested and primary format is not JPEG)
     fallback_count = 0
     fallback_pattern = ""
     if do_fallback and fmt != "jpeg":
         fallback_dir = str(OUTPUT_DIR / f"{job_id}_fallback")
-        fallback_count = await encode_frames(job.tmp_dir, fallback_dir, "jpeg", {"qv": 5})
+        fc, _ = await encode_frames(job.tmp_dir, fallback_dir, "jpeg", {"qv": 5})
+        fallback_count = fc
         fallback_pattern = "frame_%04d.jpg"
 
     # Manifest
@@ -413,7 +559,7 @@ async def rerun_job(
         if fallback_out.exists():
             total_size += sum(f.stat().st_size for f in fallback_out.iterdir() if f.is_file())
 
-    jobs.update(
+    await jobs.update(
         job_id,
         status="done",
         frame_count=encoded_count,
@@ -423,6 +569,61 @@ async def rerun_job(
     )
 
     return {"jobId": job_id, "status": "done", "frameCount": encoded_count, "totalSizeBytes": total_size}
+
+
+@router.post("/trim-export")
+async def trim_export(
+    bg: BackgroundTasks,
+    file: UploadFile = File(...),
+    fps: float = Form(24.0),
+    trimStart: float = Form(0.0),
+    trimEnd: float = Form(0.0),
+):
+    if not file.filename:
+        raise HTTPException(400, "No filename provided")
+
+    safe_name = Path(file.filename).name
+    dest_dir = Path.home() / ".frameforge" / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"trim_{os.urandom(4).hex()}_{safe_name}"
+
+    total_read = 0
+    with open(dest, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"File too large — max {MAX_UPLOAD_SIZE // (1024**3)}GB")
+            f.write(chunk)
+
+    tmp_dir = Path.home() / ".frameforge" / "tmp" / f"trim_{os.urandom(4).hex()}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        await extract_frames(str(dest), str(tmp_dir), fps, trimStart, trimEnd)
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        dest.unlink(missing_ok=True)
+        raise HTTPException(500, f"Frame extraction failed: {e}")
+
+    zip_io = tempfile.NamedTemporaryFile(delete=False)
+    with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+        for png in sorted(tmp_dir.glob("frame_*.png")):
+            zf.write(png, png.name)
+
+    zip_io.close()
+
+    bg.add_task(_cleanup_temp, zip_io.name)
+    bg.add_task(lambda: shutil.rmtree(tmp_dir, ignore_errors=True))
+    bg.add_task(lambda: dest.unlink(missing_ok=True))
+
+    base_name = safe_name.rsplit(".", 1)[0]
+    return FileResponse(
+        zip_io.name,
+        media_type="application/zip",
+        filename=f"{base_name}-trimmed-frames.zip",
+        headers={"Content-Disposition": f"attachment; filename={base_name}-trimmed-frames.zip"},
+    )
 
 
 @router.post("/convert-image")
@@ -435,9 +636,10 @@ async def convert_image_endpoint(
     if not file.filename:
         raise HTTPException(400, "No filename provided")
 
+    safe_name = Path(file.filename).name
     dest_dir = Path.home() / ".frameforge" / "uploads"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "png"
+    ext = safe_name.rsplit(".", 1)[-1] if "." in safe_name else "png"
     dest = dest_dir / f"convert_{os.urandom(4).hex()}.{ext}"
 
     total_read = 0

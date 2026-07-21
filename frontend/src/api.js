@@ -57,7 +57,7 @@ export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt }, signal
   return fetchJson(`${API}/preview`, { method: 'POST', body: form }, signal);
 }
 
-export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality }, signal) {
+export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, fallback }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
@@ -65,6 +65,7 @@ export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality }
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
+  form.append('fallback', fallback ? 'true' : 'false');
   return fetchJson(`${API}/encode`, { method: 'POST', body: form }, signal);
 }
 
@@ -90,4 +91,18 @@ export async function convertImage(file, { fmt, quality, resize }, signal) {
 
 export function downloadUrl(jobId) {
   return `${API}/jobs/${jobId}/download`;
+}
+
+export function compressedUrl(jobId) {
+  return `${API}/jobs/${jobId}/compressed`;
+}
+
+export async function compressVideo(file, { format, crf, preset, keepAudio }, signal) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('format', format || '');
+  form.append('crf', String(crf));
+  form.append('preset', preset);
+  form.append('keepAudio', keepAudio ? 'true' : 'false');
+  return fetchJson(`${API}/compress`, { method: 'POST', body: form }, signal);
 }

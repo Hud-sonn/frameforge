@@ -67,11 +67,11 @@ function Dropzone({ onFile, uploading }) {
   );
 }
 
-function VideoSummary({ job }) {
+function VideoSummary({ job, thumbnail }) {
   const m = job.metadata;
   return (
     <div className="video-summary">
-      <div className="video-thumb"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5V19L19 12L8 5Z"/></svg></div>
+      <div className="video-thumb">{thumbnail ? <img src={`data:image/jpeg;base64,${thumbnail}`} alt="" /> : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5V19L19 12L8 5Z"/></svg>}</div>
       <div className="video-meta">
         <div className="fname">{job.filename}</div>
         <div className="meta-chips">
@@ -119,7 +119,7 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
   return (
     <>
       <div className="panel">
-        <VideoSummary job={job} />
+        <VideoSummary job={job} thumbnail={job.thumbnail} />
         <TrimControls duration={job.metadata.duration} trimStart={trimStart} trimEnd={trimEnd} onChange={setTrim} />
       </div>
       <div className="panel">
@@ -154,7 +154,7 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
   );
 }
 
-function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, encoding }) {
+function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, encoding, fmt }) {
   const presets = preview.samples || [];
   if (presets.length === 0) return (<div className="panel"><p>No preview data — video may be too short.</p></div>);
 
@@ -174,7 +174,7 @@ function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, 
             const sel = selectedQuality !== null && selectedQuality === qi;
             return (<div key={qi} className={`preview-cell ${sel ? 'selected' : ''}`} onClick={() => onSelect(qi)}>
               <span className="pick-tag">SELECTED</span>
-              {f?.image ? <img src={`data:image/jpeg;base64,${f.image}`} alt="" /> : <div style={{ height: 80, background: 'var(--char)' }} />}
+              {f?.image ? <img src={`data:image/${fmt === 'jpeg' ? 'jpeg' : fmt};base64,${f.image}`} alt="" /> : <div style={{ height: 80, background: 'var(--char)' }} />}
               <div className="cell-info"><span>{f?.size ? formatSize(f.size) : '—'}</span></div>
             </div>);
           })}
@@ -269,7 +269,7 @@ function ResultsPanel({ result, sourceSizeBytes, onReset }) {
         <pre>{JSON.stringify(manifest, null, 2)}</pre>
       </div>)}
       <div className="head-actions mt-16" style={{ justifyContent: 'flex-end' }}>
-        <a className="btn btn-ghost" href={`/api/jobs/${result.jobId}/download`} download><SvgDownload/> Download .zip</a>
+        <a className="btn btn-ghost" href={api.downloadUrl(result.jobId)} download><SvgDownload/> Download .zip</a>
         <button className="btn btn-primary" onClick={onReset}>Run Another</button>
       </div>
     </div>
@@ -291,11 +291,302 @@ function JobHistoryList({ jobs, onRerun }) {
           </div>
           <div className="h-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => onRerun(j)}>Re-run</button>
-            {j.manifest_path && <a className="btn btn-ghost btn-sm" href={`/api/jobs/${j.id}/download`}>Open</a>}
+            {j.manifest_path && <a className="btn btn-ghost btn-sm" href={api.downloadUrl(j.id)} download>Download</a>}
           </div>
         </div>
       ))}</div>
     </div>
+  );
+}
+
+/* ─── Quick Trim ─── */
+
+function TrimExport() {
+  const [file, setFile] = useState(null);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [fps, setFps] = useState(24);
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const videoRef = useRef(null);
+
+  const handleFile = (f) => {
+    setError(null);
+    setFile(f);
+    const url = URL.createObjectURL(f);
+    const vid = document.createElement('video');
+    vid.preload = 'metadata';
+    vid.onloadedmetadata = () => {
+      setDuration(vid.duration);
+      setTrimEnd(vid.duration);
+      URL.revokeObjectURL(url);
+    };
+    vid.src = url;
+    vid.load();
+  };
+
+  const handleDrop = (e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f?.type.startsWith('video/')) handleFile(f); else setError('Please drop a video file'); };
+  const handleDrag = (e) => { e.preventDefault(); setDragging(true); };
+
+  const doExport = async () => {
+    if (!file || trimEnd <= trimStart) { setError('Invalid trim range'); return; }
+    setExporting(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('fps', String(fps));
+      form.append('trimStart', String(trimStart));
+      form.append('trimEnd', String(trimEnd));
+      const res = await fetch('/api/trim-export', { method: 'POST', body: form });
+      if (!res.ok) { const txt = await res.text(); throw new Error(txt); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name.replace(/\.[^.]+$/, '') + '-trimmed-frames.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { setError(err.message); }
+    setExporting(false);
+  };
+
+  const frameCount = trimEnd > trimStart ? Math.floor((trimEnd - trimStart) * fps) : 0;
+
+  return (
+    <div className="panel">
+      <div className="panel-title">Quick Trim & Export</div>
+      <div className="panel-sub">Trim a video and download raw PNG frames as a ZIP.</div>
+      {!file ? (
+        <div className={`dropzone ${dragging ? 'dragging' : ''}`}
+          onDrop={handleDrop} onDragOver={handleDrag} onDragLeave={() => setDragging(false)}
+          onClick={() => document.getElementById('trim-input')?.click()}>
+          <SvgUpload /><span>{dragging ? 'Drop video here' : 'Drop a video or click to browse'}</span>
+        </div>
+      ) : (
+        <>
+          <div className="file-badge">{file.name} · {formatDuration(duration)}</div>
+          <input id="trim-input" type="file" accept="video/*" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+          <div className="trim-row">
+            <label>Start<output>{formatDuration(trimStart)}</output>
+              <input type="range" min="0" max={duration || 1} step="0.1" value={trimStart} onChange={(e) => setTrimStart(Math.min(Number(e.target.value), trimEnd - 0.5))} />
+            </label>
+            <label>End<output>{formatDuration(trimEnd)}</output>
+              <input type="range" min="0" max={duration || 1} step="0.1" value={trimEnd} onChange={(e) => setTrimEnd(Math.max(Number(e.target.value), trimStart + 0.5))} />
+            </label>
+          </div>
+          <label className="fps-row">FPS
+            <select value={fps} onChange={(e) => setFps(Number(e.target.value))}>{FPS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}</select>
+          </label>
+          <div className="frame-count">{frameCount} frames · {formatSize(frameCount * 100 * 1024)} estimated</div>
+          {error && <div className="prereq-banner error"><span className="led" />{error}</div>}
+          <button className="btn btn-primary" onClick={doExport} disabled={exporting || frameCount < 1}>
+            {exporting ? 'Exporting…' : <><SvgDownload /> Export Trimmed Frames</>}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ─── Compress / Convert Video ─── */
+
+const COMPRESS_FORMATS = [
+  { id: '', name: 'Keep original', note: 'Same container as source' },
+  { id: 'mp4', name: 'MP4', note: 'H.264 + AAC' },
+  { id: 'webm', name: 'WebM', note: 'VP9 + Opus' },
+  { id: 'mkv', name: 'MKV', note: 'H.264 + AAC' },
+  { id: 'mov', name: 'MOV', note: 'H.264 + AAC' },
+  { id: 'avi', name: 'AVI', note: 'H.264 + AAC' },
+];
+
+const PRESETS = [
+  { id: 'slow', name: 'Max Compression', note: 'Smallest size, slowest encode' },
+  { id: 'medium', name: 'Balanced', note: 'Good size/speed tradeoff' },
+  { id: 'fast', name: 'Fast', note: 'Quick encode, larger output' },
+];
+
+function CompressPanel() {
+  const [file, setFile] = useState(null);
+  const [meta, setMeta] = useState(null);
+  const [format, setFormat] = useState('');
+  const [crf, setCrf] = useState(23);
+  const [preset, setPreset] = useState('medium');
+  const [keepAudio, setKeepAudio] = useState(true);
+  const [compressing, setCompressing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [stage, setStage] = useState('idle'); // idle | compressing | done
+  const [progress, setProgress] = useState({ current: 0, total: 100 });
+  const progressRef = useRef(null);
+  const sourceExt = meta ? '.' + (meta.filename?.split('.').pop() || 'mp4') : '.mp4';
+
+  useEffect(() => {
+    return () => { if (progressRef.current) clearInterval(progressRef.current); };
+  }, []);
+
+  const handleFile = async (f) => {
+    if (!f.type.startsWith('video/')) { setError('Please select a video file'); return; }
+    setError(null);
+    setResult(null);
+    setFile(f);
+    setMeta({ filename: f.name, size: f.size });
+  };
+
+  const pollProgress = (jobId) => {
+    progressRef.current = setInterval(async () => {
+      try {
+        const st = await api.pollJobStatus(jobId);
+        const p = st.progress || {};
+        setProgress(p);
+        if (p.stage === 'done' || st.status === 'done') {
+          clearInterval(progressRef.current);
+          progressRef.current = null;
+          const outExt = format || (st.source_filename?.split('.').pop() || 'mp4');
+          setResult({
+            jobId,
+            status: 'done',
+            sourceSizeBytes: st.source_size_bytes || 0,
+            outputSizeBytes: st.total_size_bytes || 0,
+            outputFilename: st.source_filename ? st.source_filename.replace(/\.[^.]+$/, '') + '-compressed.' + outExt : 'compressed.' + outExt,
+          });
+          setStage('done');
+        }
+        if (st.status === 'failed') {
+          clearInterval(progressRef.current);
+          progressRef.current = null;
+          setError('Compression failed');
+          setStage('idle');
+        }
+      } catch {}
+    }, 800);
+  };
+
+  const doCompress = async () => {
+    if (!file) return;
+    setCompressing(true);
+    setError(null);
+    setStage('compressing');
+    setProgress({ current: 0, total: 100 });
+    try {
+      const data = await api.compressVideo(file, { format, crf, preset, keepAudio });
+      pollProgress(data.jobId);
+    } catch (e) {
+      if (e.name !== 'AbortError') setError(e.message);
+      setStage('idle');
+      setCompressing(false);
+    }
+  };
+
+  const pct = progress.total > 0 ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : 0;
+  const reduction = result ? (((result.sourceSizeBytes - result.outputSizeBytes) / result.sourceSizeBytes) * 100).toFixed(1) : 0;
+  const saved = result ? result.sourceSizeBytes - result.outputSizeBytes : 0;
+
+  return (
+    <>
+      <div className="panel">
+        <div className="panel-title">Compress / Convert Video</div>
+        <div className="panel-sub">Reduce file size or change format while keeping audio.</div>
+        {!file ? (
+          <div className={`dropzone ${dragging ? 'dragging' : ''}`}
+            onClick={() => document.getElementById('compress-input')?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer?.files?.[0]; if (f) handleFile(f); }}>
+            <SvgUpload />
+            <h3>Drop a video file here</h3>
+            <p>or click to browse – MP4, MOV, MKV, WEBM</p>
+            <div className="formats">MP4 · MOV · MKV · WEBM</div>
+          </div>
+        ) : (
+          <>
+            {meta && <div className="file-badge">{meta.filename} · {formatSize(meta.size)}</div>}
+            <input id="compress-input" type="file" accept="video/*" style={{ display: 'none' }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+            <div className="controls-grid">
+              <div className="field">
+                <label>Output Format</label>
+                <div className="radio-stack">{COMPRESS_FORMATS.map(f => {
+                  const label = f.id ? f.name : `Keep original (${sourceExt})`;
+                  return (
+                  <div key={f.id} className={`radio-row ${format === f.id ? 'selected' : ''}`} onClick={() => setFormat(f.id)}>
+                    <div className="rb" />
+                    <div className="rtext"><div className="rname">{label}</div><div className="rnote">{f.note}</div></div>
+                  </div>
+                  );
+                })}</div>
+              </div>
+              <div className="field">
+                <label>Compression</label>
+                <div className="radio-stack">{PRESETS.map(p => (
+                  <div key={p.id} className={`radio-row ${preset === p.id ? 'selected' : ''}`} onClick={() => setPreset(p.id)}>
+                    <div className="rb" />
+                    <div className="rtext"><div className="rname">{p.name}</div><div className="rnote">{p.note}</div></div>
+                  </div>
+                ))}</div>
+                <div className="crf-row">
+                  <label>Quality (CRF): <strong>{crf}</strong></label>
+                  <input type="range" min="18" max="51" value={crf} onChange={(e) => setCrf(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--ember)' }} />
+                  <div className="crf-labels"><span>Better</span><span>Smaller</span></div>
+                </div>
+              </div>
+            </div>
+            <div className="checkbox-row" onClick={() => setKeepAudio(!keepAudio)}>
+              <div className={`cb ${keepAudio ? 'checked' : ''}`}>{keepAudio && <SvgCheck />}</div>
+              Keep audio track
+            </div>
+            {error && <div className="prereq-banner error" style={{ marginTop: 12 }}><span className="led" />{error}</div>}
+            {stage !== 'done' ? (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
+                <button className="btn btn-primary" onClick={doCompress} disabled={compressing}>
+                  {compressing && <SvgSpinner />}{compressing ? 'Compressing…' : 'Compress Video'}
+                </button>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+      {stage === 'compressing' && (
+        <div className="panel">
+          <div className="progress-block">
+            <div className="progress-ring-wrap">
+              <svg width="120" height="120" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="var(--line)" strokeWidth="6" />
+                <circle cx="60" cy="60" r="50" fill="none" stroke="var(--ember)" strokeWidth="6"
+                  strokeDasharray={2 * Math.PI * 50} strokeDashoffset={2 * Math.PI * 50 * (1 - pct / 100)}
+                  strokeLinecap="round" style={{ transition: 'stroke-dashoffset 0.3s ease' }} />
+              </svg>
+              <div className="pct">{pct}%</div>
+            </div>
+            <div className="progress-status"><strong>Compressing video…</strong></div>
+          </div>
+        </div>
+      )}
+      {stage === 'done' && result && (
+        <div className="panel">
+          <div className="panel-title">Compression Complete</div>
+          <div className="panel-sub">{result.outputFilename}</div>
+          <div className="results-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+            <div className="stat-card"><div className="stat-label">Source Size</div><div className="stat-value">{formatSize(result.sourceSizeBytes)}</div></div>
+            <div className="stat-card"><div className="stat-label">Output Size</div><div className="stat-value ember">{formatSize(result.outputSizeBytes)}</div></div>
+            <div className="stat-card"><div className="stat-label">Reduction</div><div className="stat-value ember">{reduction}%</div>{saved > 0 && <div className="stat-delta">Saved {formatSize(saved)}</div>}</div>
+          </div>
+          {result.sourceSizeBytes > 0 && (<div className="compare-bar-wrap">
+            <div className="compare-row"><span className="clabel">Source</span><div className="compare-track"><div className="compare-fill before" /></div><span className="cval">{formatSize(result.sourceSizeBytes)}</span></div>
+            <div className="compare-row"><span className="clabel">Output</span><div className="compare-track"><div className="compare-fill after" style={{ width: `${Math.min(100, Number((result.outputSizeBytes / result.sourceSizeBytes) * 100))}%` }} /></div><span className="cval">{formatSize(result.outputSizeBytes)}</span></div>
+          </div>)}
+          <div className="head-actions mt-16" style={{ justifyContent: 'flex-end' }}>
+            <a className="btn btn-ghost" href={api.compressedUrl(result.jobId)} download><SvgDownload /> Download</a>
+            <button className="btn btn-primary" onClick={() => { setFile(null); setMeta(null); setResult(null); setError(null); setStage('idle'); }}>Compress Another</button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -563,6 +854,8 @@ export default function App() {
           <span className="nav-label">Workspace</span>
           <div className={`nav-item ${page === 'new' ? 'active' : ''}`} onClick={() => { setPage('new'); setError(null); }}><span className="dot" />Frame Extraction</div>
           <div className={`nav-item ${page === 'image' ? 'active' : ''}`} onClick={() => { setPage('image'); setError(null); }}><span className="dot" />Image Converter</div>
+          <div className={`nav-item ${page === 'trim' ? 'active' : ''}`} onClick={() => { setPage('trim'); setError(null); }}><span className="dot" />Quick Trim</div>
+          <div className={`nav-item ${page === 'compress' ? 'active' : ''}`} onClick={() => { setPage('compress'); setError(null); }}><span className="dot" />Compress / Convert</div>
           <div className={`nav-item ${page === 'history' ? 'active' : ''}`} onClick={() => { setPage('history'); setError(null); loadJobs(); }}><span className="dot" />Job History</div>
         </nav>
         <div className="sidebar-footer">
@@ -574,8 +867,8 @@ export default function App() {
       <main className="main">
         <div className="page-head">
           <div>
-            <span className="eyebrow">{page === 'image' ? 'Image Conversion' : page === 'history' ? 'Job History' : 'Frame Extraction & Compression'}</span>
-            <h1>{page === 'image' ? 'Image Converter' : page === 'history' ? 'Job History' : 'New Job'}</h1>
+            <span className="eyebrow">{page === 'image' ? 'Image Conversion' : page === 'history' ? 'Job History' : page === 'trim' ? 'Quick Trim' : page === 'compress' ? 'Compress / Convert' : 'Frame Extraction & Compression'}</span>
+            <h1>{page === 'image' ? 'Image Converter' : page === 'history' ? 'Job History' : page === 'trim' ? 'Quick Trim & Export' : page === 'compress' ? 'Compress / Convert' : 'New Job'}</h1>
           </div>
           <div className="head-actions">
             {page === 'new' && step === 0 && <button className="btn btn-primary" disabled={uploading} onClick={() => document.getElementById('video-input')?.click()}><SvgUpload/>{uploading ? 'Uploading…' : 'Upload Video'}</button>}
@@ -590,6 +883,8 @@ export default function App() {
         {error && (<div className="prereq-banner error" style={{ marginBottom: 12 }}><span className="led" />{error}</div>)}
 
         {page === 'image' && <ImageConverter />}
+        {page === 'trim' && <TrimExport />}
+        {page === 'compress' && <CompressPanel />}
         {page === 'history' && <JobHistoryList jobs={jobs} onRerun={doRerun} />}
 
         {page === 'new' && (<>
@@ -599,7 +894,7 @@ export default function App() {
 
           {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} av1OK={av1OK} />}
 
-          {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} />}
+          {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} fmt={fmt} />}
 
           {step === 3 && <ProgressPanel jobId={job?.jobId} onDone={handleEncodeDone} onError={handleEncodeError} />}
 
