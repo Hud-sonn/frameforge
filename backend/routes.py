@@ -29,6 +29,18 @@ from .ffmpeg_utils import (
     resolve_source_extension,
     write_manifest,
 )
+
+_AV1_ENCODER_AVAILABLE: bool | None = None
+
+
+async def _ensure_av1() -> None:
+    """Lazily check and cache AV1 encoder availability. Raises if unavailable."""
+    global _AV1_ENCODER_AVAILABLE
+    if _AV1_ENCODER_AVAILABLE is None:
+        health = await check_ffmpeg()
+        _AV1_ENCODER_AVAILABLE = bool(health.get("av1_encoder"))
+    if not _AV1_ENCODER_AVAILABLE:
+        raise HTTPException(400, "AV1 encoder (libaom-av1) not found in ffmpeg")
 from .jobs import JobsManager
 
 logger = logging.getLogger(__name__)
@@ -290,6 +302,9 @@ async def preview(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
 ):
+    if fmt == "avif":
+        await _ensure_av1()
+
     job = jobs.get(jobId)
     if not job:
         raise HTTPException(404, "Job not found")
@@ -377,6 +392,9 @@ async def encode(
     quality: str = Form('{"crf": 30}'),
     fallback: str = Form("false"),
 ):
+    if fmt == "avif":
+        await _ensure_av1()
+
     job = jobs.get(jobId)
     if not job:
         raise HTTPException(404, "Job not found")

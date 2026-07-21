@@ -15,7 +15,7 @@ FFPROBE = shutil.which("ffprobe") or "ffprobe"
 # Default timeouts (seconds)
 _TIMEOUT_SHORT = 120       # single frame extract, probe, health check
 _TIMEOUT_EXTRACT = 900     # full frame extraction (15 min)
-_TIMEOUT_ENCODE_FRAME = 60  # per-frame encode
+_TIMEOUT_ENCODE_FRAME = 300  # per-frame encode (AVIF at 4K can take 2-5 min)
 _TIMEOUT_CONVERT = 300     # image conversion
 _TIMEOUT_COMPRESS = 3600   # video compression (1 hour)
 
