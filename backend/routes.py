@@ -347,7 +347,7 @@ async def preview(
                 elif fmt == "avif":
                     cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-still-picture", "1"]
                 cmd.append(str(dst))
-                await _run_ffmpeg(cmd, timeout=120)
+                await _run_ffmpeg(cmd, timeout=300)
 
         frame_data = []
         for i in extracted_indices:
