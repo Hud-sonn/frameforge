@@ -302,6 +302,8 @@ async def preview(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
 ):
+    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2s  fps=%s", jobId, fmt, trimStart, trimEnd, fps)
+
     if fmt == "avif":
         await _ensure_av1()
 
@@ -313,10 +315,10 @@ async def preview(
     if duration <= 0:
         raise HTTPException(400, "Trim range must be positive")
 
-    # Extract only 4 sample frames at evenly spaced timestamps
     timestamps = [
         trimStart + duration * p for p in [0.05, 0.35, 0.65, 0.95]
     ]
+    logger.info("PREVIEW  sample timestamps: %s", timestamps)
 
     sample_dir = Path(job.tmp_dir) / "preview"
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -327,6 +329,10 @@ async def preview(
         ok = await extract_frame_at_timestamp(job.source_path, str(out), ts)
         if ok and out.exists():
             extracted_indices.append(i)
+            sz = out.stat().st_size
+            logger.info("PREVIEW  extracted frame %d at %.2fs  size=%d", i, ts, sz)
+        else:
+            logger.warning("PREVIEW  FAILED to extract frame %d at %.2fs", i, ts)
 
     if not extracted_indices:
         raise HTTPException(400, "No frames could be extracted")
@@ -341,6 +347,7 @@ async def preview(
         "webp": [{"quality": 90}, {"quality": 70}, {"quality": 50}],
     }
     presets = quality_presets.get(fmt, quality_presets["avif"])
+    logger.info("PREVIEW  encoding %d frames × %d quality presets (fmt=%s)", len(extracted_indices), len(presets), fmt)
 
     for qi, preset in enumerate(presets):
         qdir = preview_dir / f"q{qi}"
@@ -348,6 +355,7 @@ async def preview(
         for i in extracted_indices:
             src = sample_dir / f"frame_{i+1:04d}.png"
             if not src.exists():
+                logger.warning("PREVIEW  missing source frame %d, skipping", i)
                 continue
             ext_map = {"avif": "avif", "jpeg": "jpg", "webp": "webp"}
             dst = qdir / f"frame_{i+1:04d}.{ext_map.get(fmt, fmt)}"
@@ -362,7 +370,12 @@ async def preview(
                 elif fmt == "avif":
                     cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-still-picture", "1"]
                 cmd.append(str(dst))
+                logger.info("PREVIEW  ffmpeg[%d,q%d]: %s ...", i, qi, " ".join(str(a) for a in cmd[:8]))
                 await _run_ffmpeg(cmd, timeout=300)
+                if dst.exists():
+                    logger.info("PREVIEW  encoded frame[%d,q%d] -> %s  size=%d", i, qi, dst.name, dst.stat().st_size)
+                else:
+                    logger.warning("PREVIEW  ffmpeg[%d,q%d] produced NO output", i, qi)
 
         frame_data = []
         for i in extracted_indices:
@@ -379,6 +392,7 @@ async def preview(
                 frame_data.append({"index": i, "size": 0, "image": None})
         results.append({"quality": preset, "frames": frame_data})
 
+    logger.info("PREVIEW  done  samples=%d  frame_count=%d", len(results), len(extracted_indices))
     return {"samples": results, "sampleIndices": extracted_indices}
 
 
