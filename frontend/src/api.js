@@ -47,7 +47,7 @@ export async function getManifest(jobId, signal) {
   return fetchJson(`${API}/jobs/${jobId}/manifest`, {}, signal);
 }
 
-export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt, speed }, signal) {
+export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt, speed, maxWidth }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
@@ -55,10 +55,11 @@ export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt, speed },
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
   form.append('speed', String(speed ?? 2));
+  form.append('maxWidth', maxWidth || '');
   return fetchJson(`${API}/preview`, { method: 'POST', body: form }, signal);
 }
 
-export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, speed, fallback }, signal) {
+export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, speed, maxWidth, fallback }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
@@ -67,6 +68,7 @@ export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, 
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
   form.append('speed', String(speed ?? 2));
+  form.append('maxWidth', maxWidth || '');
   form.append('fallback', fallback ? 'true' : 'false');
   return fetchJson(`${API}/encode`, { method: 'POST', body: form }, signal);
 }
@@ -107,4 +109,22 @@ export async function compressVideo(file, { format, crf, preset, keepAudio }, si
   form.append('preset', preset);
   form.append('keepAudio', keepAudio ? 'true' : 'false');
   return fetchJson(`${API}/compress`, { method: 'POST', body: form }, signal);
+}
+
+export async function bgRemoveChromakey(file, { keyColor, similarity, blend }, signal) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('keyColor', keyColor);
+  form.append('similarity', String(similarity));
+  form.append('blend', String(blend));
+  return fetch(`${API}/bgremove/chromakey`, { method: 'POST', body: form, signal });
+}
+
+export async function bgRemoveAI(file, { fps, trimStart, trimEnd }, signal) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('fps', String(fps));
+  form.append('trimStart', String(trimStart));
+  form.append('trimEnd', String(trimEnd));
+  return fetch(`${API}/bgremove/ai`, { method: 'POST', body: form, signal });
 }

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import os
 import re
 import shutil
 from pathlib import Path
@@ -18,6 +20,25 @@ _TIMEOUT_EXTRACT = 900     # full frame extraction (15 min)
 _TIMEOUT_ENCODE_FRAME = 300  # per-frame encode (AVIF at 4K can take 2-5 min)
 _TIMEOUT_CONVERT = 300     # image conversion
 _TIMEOUT_COMPRESS = 3600   # video compression (1 hour)
+
+_CPU_COUNT: int | None = None
+
+def _detect_cpu_count() -> int:
+    global _CPU_COUNT
+    if _CPU_COUNT is None:
+        _CPU_COUNT = os.cpu_count() or 4
+    return _CPU_COUNT
+
+def _avif_enc_flags(speed: int = 2) -> list[str]:
+    cpus = _detect_cpu_count()
+    tile_c = min(2, max(0, int(math.log2(cpus))))
+    tile_r = min(1, max(0, int(math.log2(cpus)) - 1))
+    return [
+        "-cpu-used", str(speed),
+        "-row-mt", "1",
+        "-tile-columns", str(tile_c),
+        "-tile-rows", str(tile_r),
+    ]
 
 
 async def _run_ffmpeg(
@@ -363,8 +384,10 @@ async def encode_frames(
     fmt: str,
     quality: dict,
     progress_callback=None,
-    max_concurrent: int = 2,
+    max_concurrent: int | None = None,
 ) -> tuple[int, list[int]]:
+    if max_concurrent is None:
+        max_concurrent = max(1, _detect_cpu_count() - 1)
     """Encode PNG intermediates to target format. Returns (count, failed_indices).
     Runs up to `max_concurrent` encodes in parallel for CPU-bound formats."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -379,6 +402,13 @@ async def encode_frames(
     lock = asyncio.Lock()
     failed = []
 
+    def _build_cmd() -> list[str]:
+        cmd = [FFMPEG, "-y", "-i", ""]
+        mw = quality.get("maxWidth", "")
+        if mw:
+            cmd += ["-vf", f"scale='min({mw},iw)':'min(trunc(oh*a/2)*2,dh)':flags=lanczos"]
+        return cmd
+
     async def _encode_one(png: Path, index: int) -> bool:
         nonlocal completed
         out_name = f"frame_{index+1:04d}.{ext}"
@@ -390,28 +420,27 @@ async def encode_frames(
                     shutil.copy2(str(png), out_path)
                 elif fmt == "jpeg":
                     qv = quality.get("qv", 5)
-                    await _run_ffmpeg(
-                        [FFMPEG, "-y", "-i", str(png), "-q:v", str(qv), out_path],
-                        timeout=_TIMEOUT_ENCODE_FRAME,
-                    )
+                    cmd = _build_cmd()
+                    cmd[3] = str(png)
+                    cmd += ["-q:v", str(qv), out_path]
+                    await _run_ffmpeg(cmd, timeout=_TIMEOUT_ENCODE_FRAME)
                 elif fmt == "webp":
                     q = quality.get("quality", 80)
-                    await _run_ffmpeg(
-                        [FFMPEG, "-y", "-i", str(png), "-quality", str(q), out_path],
-                        timeout=_TIMEOUT_ENCODE_FRAME,
-                    )
+                    cmd = _build_cmd()
+                    cmd[3] = str(png)
+                    cmd += ["-quality", str(q), out_path]
+                    await _run_ffmpeg(cmd, timeout=_TIMEOUT_ENCODE_FRAME)
                 elif fmt == "avif":
                     crf = quality.get("crf", 30)
                     speed = quality.get("speed", 2)
-                    await _run_ffmpeg(
-                        [
-                            FFMPEG, "-y", "-i", str(png),
-                            "-c:v", "libaom-av1", "-crf", str(crf),
-                            "-cpu-used", str(speed),
-                            "-still-picture", "1", out_path,
-                        ],
-                        timeout=_TIMEOUT_ENCODE_FRAME,
-                    )
+                    cmd = _build_cmd()
+                    cmd[3] = str(png)
+                    cmd += [
+                        "-c:v", "libaom-av1", "-crf", str(crf),
+                        *_avif_enc_flags(speed),
+                        "-still-picture", "1", out_path,
+                    ]
+                    await _run_ffmpeg(cmd, timeout=_TIMEOUT_ENCODE_FRAME)
 
             async with lock:
                 completed += 1
@@ -459,10 +488,92 @@ async def convert_image(
             cmd += ["-quality", str(q), out_path]
         elif fmt == "avif":
             crf = quality.get("crf", 30)
-            cmd += ["-c:v", "libaom-av1", "-crf", str(crf), "-still-picture", "1", out_path]
+            speed = quality.get("speed", 2)
+            cmd += ["-c:v", "libaom-av1", "-crf", str(crf), *_avif_enc_flags(speed), "-still-picture", "1", out_path]
         await _run_ffmpeg(cmd, timeout=_TIMEOUT_CONVERT)
 
     return Path(out_path).stat().st_size
+
+
+async def remove_background_chromakey(
+    input_path: str,
+    output_path: str,
+    key_color: str = "0x00FF00",
+    similarity: float = 0.2,
+    blend: float = 0.3,
+    progress_callback=None,
+) -> tuple[str, int]:
+    """Apply chroma key filter via ffmpeg. Outputs WebM/VP9 with alpha channel.
+    Returns (output_path, file_size)."""
+    cmd = [
+        FFMPEG, "-y", "-i", input_path,
+        "-vf", f"chromakey=color={key_color}:similarity={similarity}:blend={blend}",
+        "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+        "-auto-alt-ref", "0", "-b:v", "2M",
+        "-progress", "pipe:1",
+        output_path,
+    ]
+
+    meta = await probe_video(input_path)
+    duration = meta["duration"]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+
+    last_pct = 0
+    try:
+        while True:
+            line = await asyncio.wait_for(proc.stdout.readline(), timeout=_TIMEOUT_COMPRESS)
+            if not line:
+                break
+            decoded = line.decode().strip()
+            if decoded.startswith("out_time_us="):
+                try:
+                    us = int(decoded.split("=", 1)[1])
+                    sec = us / 1_000_000
+                    if duration > 0:
+                        pct = min(100, int((sec / duration) * 100))
+                        if pct != last_pct:
+                            last_pct = pct
+                            if progress_callback:
+                                if asyncio.iscoroutinefunction(progress_callback):
+                                    await progress_callback(pct, 100)
+                                else:
+                                    progress_callback(pct, 100)
+                except (ValueError, IndexError):
+                    pass
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        await proc.wait()
+        raise RuntimeError(f"Chroma key processing timed out")
+
+    await proc.wait()
+    if proc.returncode != 0:
+        stderr = await proc.stderr.read()
+        raise RuntimeError(f"Chroma key failed: {stderr.decode(errors='replace')}")
+
+    if not Path(output_path).exists():
+        raise RuntimeError("Chroma key produced no output")
+
+    return output_path, Path(output_path).stat().st_size
+
+
+async def segment_frame_ai(png_path: str, output_path: str) -> bool:
+    """Run rembg on a single PNG frame. Returns True on success."""
+    try:
+        from rembg import remove
+        from PIL import Image
+        img = Image.open(png_path)
+        result = remove(img)
+        result.save(output_path, "PNG")
+        return Path(output_path).exists()
+    except Exception as e:
+        logger.warning("AI segmentation failed for %s: %s", png_path, e)
+        return False
 
 
 def write_manifest(

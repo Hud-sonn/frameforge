@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from .config import OUTPUT_DIR
 from .ffmpeg_utils import (
     FFMPEG,
+    _avif_enc_flags,
     _run_ffmpeg,
     check_ffmpeg,
     compress_video,
@@ -26,7 +27,9 @@ from .ffmpeg_utils import (
     extract_frame_at_timestamp,
     extract_frames,
     probe_video,
+    remove_background_chromakey,
     resolve_source_extension,
+    segment_frame_ai,
     write_manifest,
 )
 
@@ -302,8 +305,9 @@ async def preview(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
     speed: int = Form(2),
+    maxWidth: str = Form(""),
 ):
-    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2s  fps=%s  speed=%d", jobId, fmt, trimStart, trimEnd, fps, speed)
+    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2s  fps=%s  speed=%d  maxWidth=%s", jobId, fmt, trimStart, trimEnd, fps, speed, maxWidth)
 
     if fmt == "avif":
         await _ensure_av1()
@@ -364,12 +368,15 @@ async def preview(
                 shutil.copy2(str(src), str(dst))
             else:
                 cmd = [FFMPEG, "-y", "-i", str(src)]
+                if maxWidth:
+                    maxW = int(maxWidth)
+                    cmd += ["-vf", f"scale='min({maxW},iw)':'min(trunc(oh*a/2)*2,dh)':flags=lanczos"]
                 if fmt == "jpeg":
                     cmd += ["-q:v", str(preset.get("qv", 5))]
                 elif fmt == "webp":
                     cmd += ["-quality", str(preset.get("quality", 80))]
                 elif fmt == "avif":
-                    cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-cpu-used", str(speed), "-still-picture", "1"]
+                    cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), *_avif_enc_flags(speed), "-still-picture", "1"]
                 cmd.append(str(dst))
                 logger.info("PREVIEW  ffmpeg[%d,q%d]: %s ...", i, qi, " ".join(str(a) for a in cmd[:10]))
                 await _run_ffmpeg(cmd, timeout=300)
@@ -406,6 +413,7 @@ async def encode(
     fmt: str = Form("avif"),
     quality: str = Form('{"crf": 30}'),
     speed: int = Form(2),
+    maxWidth: str = Form(""),
     fallback: str = Form("false"),
 ):
     if fmt == "avif":
@@ -418,6 +426,8 @@ async def encode(
     quality_dict = json.loads(quality)
     if fmt == "avif":
         quality_dict["speed"] = speed
+    if maxWidth:
+        quality_dict["maxWidth"] = maxWidth
     do_fallback = fallback.lower() == "true"
     await jobs.update(jobId, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
 
@@ -711,3 +721,137 @@ async def convert_image_endpoint(
         "size": out_size,
         "image": base64.b64encode(data).decode(),
     }
+
+
+@router.post("/bgremove/chromakey")
+async def bgremove_chromakey(
+    bg: BackgroundTasks,
+    file: UploadFile = File(...),
+    keyColor: str = Form("0x00FF00"),
+    similarity: float = Form(0.2),
+    blend: float = Form(0.3),
+):
+    if not file.filename:
+        raise HTTPException(400, "No filename provided")
+
+    safe_name = Path(file.filename).name
+    dest_dir = Path.home() / ".frameforge" / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"ck_{os.urandom(4).hex()}_{safe_name}"
+
+    total_read = 0
+    with open(dest, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"File too large — max {MAX_UPLOAD_SIZE // (1024**3)}GB")
+            f.write(chunk)
+
+    base_name = safe_name.rsplit(".", 1)[0]
+    out_path = str(Path.home() / ".frameforge" / "tmp" / f"ck_{os.urandom(4).hex()}_{base_name}.webm")
+
+    try:
+        out_path, out_size = await remove_background_chromakey(
+            str(dest), out_path,
+            key_color=keyColor, similarity=similarity, blend=blend,
+        )
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        Path(out_path).unlink(missing_ok=True)
+        raise HTTPException(500, f"Chroma key failed: {e}")
+
+    bg.add_task(lambda: Path(out_path).unlink(missing_ok=True))
+    bg.add_task(lambda: dest.unlink(missing_ok=True))
+    return FileResponse(
+        out_path,
+        media_type="video/webm",
+        filename=f"{base_name}-keyed.webm",
+        headers={"Content-Disposition": f"attachment; filename={base_name}-keyed.webm"},
+    )
+
+
+@router.post("/bgremove/ai")
+async def bgremove_ai(
+    file: UploadFile = File(...),
+    fps: float = Form(24.0),
+    trimStart: float = Form(0.0),
+    trimEnd: float = Form(0.0),
+):
+    if not file.filename:
+        raise HTTPException(400, "No filename provided")
+
+    safe_name = Path(file.filename).name
+    dest_dir = Path.home() / ".frameforge" / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"ai_{os.urandom(4).hex()}_{safe_name}"
+
+    total_read = 0
+    with open(dest, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, f"File too large — max {MAX_UPLOAD_SIZE // (1024**3)}GB")
+            f.write(chunk)
+
+    job = await jobs.create(source_filename=file.filename, source_path=str(dest), source_size=0)
+    await jobs.update(job.id, status="segmenting", fps=fps, trim_start=trimStart, trim_end=trimEnd)
+
+    tmp_dir = Path(job.tmp_dir)
+    png_dir = tmp_dir / "frames"
+    seg_dir = tmp_dir / "segmented"
+    png_dir.mkdir(exist_ok=True)
+    seg_dir.mkdir(exist_ok=True)
+
+    frame_count = 0
+    try:
+        frame_count = await extract_frames(str(dest), str(png_dir), fps, trimStart, trimEnd)
+    except Exception as e:
+        await jobs.update(job.id, status="failed")
+        dest.unlink(missing_ok=True)
+        raise HTTPException(500, f"Frame extraction failed: {e}")
+
+    if frame_count == 0:
+        await jobs.update(job.id, status="failed")
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, "No frames extracted")
+
+    _progress[job.id] = {"stage": "segmenting", "current": 0, "total": frame_count}
+    await jobs.update(job.id, status="segmenting")
+
+    pngs = sorted(png_dir.glob("frame_*.png"))
+    completed = 0
+    for png in pngs:
+        out = seg_dir / png.name
+        ok = await segment_frame_ai(str(png), str(out))
+        if ok:
+            completed += 1
+        _progress[job.id] = {"stage": "segmenting", "current": completed, "total": frame_count}
+
+    if completed == 0:
+        await jobs.update(job.id, status="failed")
+        raise HTTPException(500, "AI segmentation produced no frames")
+
+    # Zip the segmented PNGs
+    zip_io = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(seg_dir.glob("frame_*.png")):
+            zf.write(f, f.name)
+
+    zip_io.close()
+
+    total_size = sum(f.stat().st_size for f in seg_dir.glob("frame_*.png"))
+    await jobs.update(job.id, status="done", frame_count=completed, total_size_bytes=total_size)
+
+    base_name = safe_name.rsplit(".", 1)[0]
+    bg = BackgroundTasks()
+    bg.add_task(_cleanup_temp, zip_io.name)
+    bg.add_task(lambda: dest.unlink(missing_ok=True))
+
+    return FileResponse(
+        zip_io.name,
+        media_type="application/zip",
+        filename=f"{base_name}-segmented-frames.zip",
+        headers={"Content-Disposition": f"attachment; filename={base_name}-segmented-frames.zip"},
+    )
