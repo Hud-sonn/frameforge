@@ -47,17 +47,18 @@ export async function getManifest(jobId, signal) {
   return fetchJson(`${API}/jobs/${jobId}/manifest`, {}, signal);
 }
 
-export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt }, signal) {
+export async function runPreview(jobId, { fps, trimStart, trimEnd, fmt, speed }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
   form.append('trimStart', trimStart);
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
+  form.append('speed', String(speed ?? 2));
   return fetchJson(`${API}/preview`, { method: 'POST', body: form }, signal);
 }
 
-export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, fallback }, signal) {
+export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, speed, fallback }, signal) {
   const form = new FormData();
   form.append('jobId', jobId);
   form.append('fps', fps);
@@ -65,6 +66,7 @@ export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, 
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
+  form.append('speed', String(speed ?? 2));
   form.append('fallback', fallback ? 'true' : 'false');
   return fetchJson(`${API}/encode`, { method: 'POST', body: form }, signal);
 }

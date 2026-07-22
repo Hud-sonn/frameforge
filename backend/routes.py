@@ -301,8 +301,9 @@ async def preview(
     trimStart: float = Form(0.0),
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
+    speed: int = Form(2),
 ):
-    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2s  fps=%s", jobId, fmt, trimStart, trimEnd, fps)
+    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2s  fps=%s  speed=%d", jobId, fmt, trimStart, trimEnd, fps, speed)
 
     if fmt == "avif":
         await _ensure_av1()
@@ -368,9 +369,9 @@ async def preview(
                 elif fmt == "webp":
                     cmd += ["-quality", str(preset.get("quality", 80))]
                 elif fmt == "avif":
-                    cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-still-picture", "1"]
+                    cmd += ["-c:v", "libaom-av1", "-crf", str(preset.get("crf", 30)), "-cpu-used", str(speed), "-still-picture", "1"]
                 cmd.append(str(dst))
-                logger.info("PREVIEW  ffmpeg[%d,q%d]: %s ...", i, qi, " ".join(str(a) for a in cmd[:8]))
+                logger.info("PREVIEW  ffmpeg[%d,q%d]: %s ...", i, qi, " ".join(str(a) for a in cmd[:10]))
                 await _run_ffmpeg(cmd, timeout=300)
                 if dst.exists():
                     logger.info("PREVIEW  encoded frame[%d,q%d] -> %s  size=%d", i, qi, dst.name, dst.stat().st_size)
@@ -404,6 +405,7 @@ async def encode(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
     quality: str = Form('{"crf": 30}'),
+    speed: int = Form(2),
     fallback: str = Form("false"),
 ):
     if fmt == "avif":
@@ -414,6 +416,8 @@ async def encode(
         raise HTTPException(404, "Job not found")
 
     quality_dict = json.loads(quality)
+    if fmt == "avif":
+        quality_dict["speed"] = speed
     do_fallback = fallback.lower() == "true"
     await jobs.update(jobId, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format=fmt, quality=quality_dict)
 

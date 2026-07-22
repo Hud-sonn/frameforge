@@ -402,10 +402,12 @@ async def encode_frames(
                     )
                 elif fmt == "avif":
                     crf = quality.get("crf", 30)
+                    speed = quality.get("speed", 2)
                     await _run_ffmpeg(
                         [
                             FFMPEG, "-y", "-i", str(png),
                             "-c:v", "libaom-av1", "-crf", str(crf),
+                            "-cpu-used", str(speed),
                             "-still-picture", "1", out_path,
                         ],
                         timeout=_TIMEOUT_ENCODE_FRAME,

@@ -115,7 +115,7 @@ function TrimControls({ duration, trimStart, trimEnd, onChange }) {
   );
 }
 
-function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, setFmt, quality, setQuality, fallback, setFallback, frameCount, onPreview, previewing, av1OK }) {
+function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, setFmt, quality, setQuality, speed, setSpeed, fallback, setFallback, frameCount, onPreview, previewing, av1OK }) {
   return (
     <>
       <div className="panel">
@@ -143,6 +143,7 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
             {fmt === 'jpeg' && (<div className="segmented">{[2, 5, 8].map(qv => (<button key={qv} className={quality.qv === qv ? 'active' : ''} onClick={() => setQuality({ qv })}>Q:v {qv}</button>))}</div>)}
             {fmt === 'webp' && (<div className="segmented">{[90, 70, 50].map(q => (<button key={q} className={quality.quality === q ? 'active' : ''} onClick={() => setQuality({ quality: q })}>{q}%</button>))}</div>)}
             {fmt === 'png' && (<div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--bone-dim)', padding: '10px 0' }}>Lossless passthrough</div>)}
+            {fmt === 'avif' && (<div className="field"><label>Speed</label><div className="segmented">{[{ v: 5, l: 'Fast' }, { v: 2, l: 'Balanced' }, { v: 0, l: 'Best' }].map(s => (<button key={s.v} className={speed === s.v ? 'active' : ''} onClick={() => setSpeed(s.v)}>{s.l}</button>))}</div><div className="tradeoff-note"><SvgInfo/><span>{{ 5: 'Fast: 3-10s/frame — quick previews and exports. Slightly larger files.', 2: 'Balanced: 15-30s/frame — good tradeoff for most use cases.', 0: 'Best: 30-120+s/frame — maximum compression, smallest files. Best for final delivery.' }[speed]}</span></div></div>)}
             {fmt !== 'png' && (<div className="checkbox-row" onClick={() => setFallback(!fallback)}><div className={`cb ${fallback ? 'checked' : ''}`}>{fallback && <SvgCheck/>}</div>Also export JPEG fallback</div>)}
             <div className="tradeoff-note mt-16"><SvgInfo/><span>{fmt === 'avif' && 'AVIF offers best compression but needs JPEG fallback for older browsers.'}{fmt === 'jpeg' && 'JPEG has universal browser support but produces larger files.'}{fmt === 'webp' && 'WebP balances size and compatibility.'}{fmt === 'png' && 'PNG is lossless — ideal when quality matters more than file size.'}</span></div>
           </div>
@@ -690,6 +691,7 @@ export default function App() {
   const [trimEnd, setTrimEnd] = useState(0);
   const [fmt, setFmt] = useState('avif');
   const [quality, setQuality] = useState({ crf: 30 });
+  const [speed, setSpeed] = useState(2);
   const [fallback, setFallback] = useState(false);
 
   const [preview, setPreview] = useState(null);
@@ -742,7 +744,7 @@ export default function App() {
       setPreview(null);
       setSelectedQualityIdx(null);
       console.log('doPreview  calling api.runPreview...');
-      const data = await api.runPreview(job.jobId, { fps, trimStart, trimEnd, fmt }, abortRef.current.signal);
+      const data = await api.runPreview(job.jobId, { fps, trimStart, trimEnd, fmt, speed }, abortRef.current.signal);
       setPreview(data);
       setStep(2);
     } catch (err) { if (err.name !== 'AbortError') { console.error('doPreview  error:', err.message); setError(err.message); } else { console.log('doPreview  aborted'); } }
@@ -759,7 +761,7 @@ export default function App() {
     setStep(3);
     try {
       const data = await api.runEncode(job.jobId, {
-        fps, trimStart, trimEnd, fmt, quality: q, fallback: fallback && fmt !== 'jpeg',
+        fps, trimStart, trimEnd, fmt, quality: q, speed, fallback: fallback && fmt !== 'jpeg',
       }, abortRef.current.signal);
       setResult(data);
       setStep(4);
@@ -868,7 +870,7 @@ export default function App() {
 
           {step === 0 && <Dropzone onFile={doUpload} uploading={uploading} />}
 
-          {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} av1OK={av1OK} />}
+          {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} speed={speed} setSpeed={setSpeed} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} av1OK={av1OK} />}
 
           {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} fmt={fmt} />}
 
