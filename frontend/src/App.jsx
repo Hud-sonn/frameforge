@@ -732,7 +732,8 @@ export default function App() {
   };
 
   const doPreview = async () => {
-    if (!job) return;
+    if (!job) { console.warn('doPreview: no job'); return; }
+    console.log('doPreview  jobId=%s  fmt=%s  trim=%.2f-%.2f  fps=%s', job.jobId, fmt, trimStart, trimEnd, fps);
     cancelRequest();
     setPreviewing(true);
     setError(null);
@@ -740,10 +741,11 @@ export default function App() {
     try {
       setPreview(null);
       setSelectedQualityIdx(null);
+      console.log('doPreview  calling api.runPreview...');
       const data = await api.runPreview(job.jobId, { fps, trimStart, trimEnd, fmt }, abortRef.current.signal);
       setPreview(data);
       setStep(2);
-    } catch (err) { if (err.name !== 'AbortError') setError(err.message); }
+    } catch (err) { if (err.name !== 'AbortError') { console.error('doPreview  error:', err.message); setError(err.message); } else { console.log('doPreview  aborted'); } }
     setPreviewing(false);
   };
 
