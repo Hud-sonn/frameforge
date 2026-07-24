@@ -386,10 +386,10 @@ async def encode_frames(
     progress_callback=None,
     max_concurrent: int | None = None,
 ) -> tuple[int, list[int]]:
-    if max_concurrent is None:
-        max_concurrent = max(1, _detect_cpu_count() - 1)
     """Encode PNG intermediates to target format. Returns (count, failed_indices).
     Runs up to `max_concurrent` encodes in parallel for CPU-bound formats."""
+    if max_concurrent is None:
+        max_concurrent = max(1, _detect_cpu_count() - 1)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     png_files = sorted(Path(input_dir).glob("frame_*.png"))
     total = len(png_files)

@@ -73,13 +73,15 @@ export async function runEncode(jobId, { fps, trimStart, trimEnd, fmt, quality, 
   return fetchJson(`${API}/encode`, { method: 'POST', body: form }, signal);
 }
 
-export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality, fallback }, signal) {
+export async function rerunJob(jobId, { fps, trimStart, trimEnd, fmt, quality, speed, maxWidth, fallback }, signal) {
   const form = new FormData();
   form.append('fps', fps);
   form.append('trimStart', trimStart);
   form.append('trimEnd', trimEnd);
   form.append('fmt', fmt);
   form.append('quality', JSON.stringify(quality));
+  form.append('speed', String(speed ?? 2));
+  form.append('maxWidth', maxWidth || '');
   form.append('fallback', fallback ? 'true' : 'false');
   return fetchJson(`${API}/jobs/${jobId}/rerun`, { method: 'POST', body: form }, signal);
 }

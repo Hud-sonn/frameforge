@@ -12,6 +12,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import traceback
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -307,7 +308,7 @@ async def preview(
     speed: int = Form(2),
     maxWidth: str = Form(""),
 ):
-    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2s  fps=%s  speed=%d  maxWidth=%s", jobId, fmt, trimStart, trimEnd, fps, speed, maxWidth)
+    logger.info("PREVIEW  jobId=%s  fmt=%s  trim=%.2f-%.2f  fps=%s  speed=%d  maxWidth=%s", jobId, fmt, trimStart, trimEnd, fps, speed, maxWidth)
 
     if fmt == "avif":
         await _ensure_av1()
@@ -543,6 +544,8 @@ async def rerun_job(
     trimEnd: float = Form(0.0),
     fmt: str = Form("avif"),
     quality: str = Form('{"crf": 30}'),
+    speed: int = Form(2),
+    maxWidth: str = Form(""),
     fallback: str = Form("false"),
 ):
     job = jobs.get(job_id)
@@ -554,6 +557,10 @@ async def rerun_job(
     cached_pngs = sorted(tmp_dir.glob("frame_*.png")) if tmp_dir.exists() else []
 
     quality_dict = json.loads(quality)
+    if fmt == "avif":
+        quality_dict["speed"] = speed
+    if maxWidth:
+        quality_dict["maxWidth"] = maxWidth
     do_fallback = fallback.lower() == "true"
 
     if not cached_pngs:
@@ -773,6 +780,7 @@ async def bgremove_chromakey(
 
 @router.post("/bgremove/ai")
 async def bgremove_ai(
+    bg: BackgroundTasks,
     file: UploadFile = File(...),
     fps: float = Form(24.0),
     trimStart: float = Form(0.0),
@@ -833,25 +841,30 @@ async def bgremove_ai(
         await jobs.update(job.id, status="failed")
         raise HTTPException(500, "AI segmentation produced no frames")
 
-    # Zip the segmented PNGs
-    zip_io = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-    with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(seg_dir.glob("frame_*.png")):
-            zf.write(f, f.name)
+    # Zip the segmented PNGs (with cleanup on failure)
+    zip_io = None
+    try:
+        zip_io = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(seg_dir.glob("frame_*.png")):
+                zf.write(f, f.name)
+        zip_io.close()
 
-    zip_io.close()
+        total_size = sum(f.stat().st_size for f in seg_dir.glob("frame_*.png"))
+        await jobs.update(job.id, status="done", frame_count=completed, total_size_bytes=total_size)
 
-    total_size = sum(f.stat().st_size for f in seg_dir.glob("frame_*.png"))
-    await jobs.update(job.id, status="done", frame_count=completed, total_size_bytes=total_size)
+        base_name = safe_name.rsplit(".", 1)[0]
+        bg.add_task(_cleanup_temp, zip_io.name)
+        bg.add_task(lambda: dest.unlink(missing_ok=True))
 
-    base_name = safe_name.rsplit(".", 1)[0]
-    bg = BackgroundTasks()
-    bg.add_task(_cleanup_temp, zip_io.name)
-    bg.add_task(lambda: dest.unlink(missing_ok=True))
-
-    return FileResponse(
-        zip_io.name,
-        media_type="application/zip",
-        filename=f"{base_name}-segmented-frames.zip",
-        headers={"Content-Disposition": f"attachment; filename={base_name}-segmented-frames.zip"},
-    )
+        return FileResponse(
+            zip_io.name,
+            media_type="application/zip",
+            filename=f"{base_name}-segmented-frames.zip",
+            headers={"Content-Disposition": f"attachment; filename={base_name}-segmented-frames.zip"},
+        )
+    except Exception:
+        if zip_io:
+            _cleanup_temp(zip_io.name)
+        dest.unlink(missing_ok=True)
+        raise

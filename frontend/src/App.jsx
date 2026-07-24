@@ -316,7 +316,6 @@ function TrimExport() {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState(null);
   const [dragging, setDragging] = useState(false);
-  const videoRef = useRef(null);
 
   const handleFile = (f) => {
     setError(null);
@@ -769,7 +768,7 @@ function ImageConverter() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [dragging, setDragging] = useState(false);
-  const { signal: abortSignal, cancel: cancelConvert } = useAbortController();
+  const { signal: abortSignal } = useAbortController();
   const previewUrlRef = useRef(null);
 
   useEffect(() => {
