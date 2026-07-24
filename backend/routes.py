@@ -247,6 +247,19 @@ async def job_status(job_id: str):
     return {**job.to_dict(), "progress": _progress.get(job_id, {})}
 
 
+@router.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    for d in [job.tmp_dir, job.output_path]:
+        if d and Path(d).exists():
+            shutil.rmtree(d, ignore_errors=True)
+    _progress.pop(job_id, None)
+    await jobs.remove(job_id)
+    return {"status": "deleted"}
+
+
 @router.get("/jobs/{job_id}/manifest")
 async def job_manifest(job_id: str):
     job = jobs.get(job_id)
@@ -780,7 +793,6 @@ async def bgremove_chromakey(
 
 @router.post("/bgremove/ai")
 async def bgremove_ai(
-    bg: BackgroundTasks,
     file: UploadFile = File(...),
     fps: float = Form(24.0),
     trimStart: float = Form(0.0),
@@ -804,67 +816,74 @@ async def bgremove_ai(
             f.write(chunk)
 
     job = await jobs.create(source_filename=file.filename, source_path=str(dest), source_size=0)
-    await jobs.update(job.id, status="segmenting", fps=fps, trim_start=trimStart, trim_end=trimEnd)
+    await jobs.update(job.id, status="extracting", fps=fps, trim_start=trimStart, trim_end=trimEnd, format="zip")
+    _progress[job.id] = {"stage": "extract", "current": 0, "total": 100}
 
-    tmp_dir = Path(job.tmp_dir)
-    png_dir = tmp_dir / "frames"
-    seg_dir = tmp_dir / "segmented"
-    png_dir.mkdir(exist_ok=True)
-    seg_dir.mkdir(exist_ok=True)
+    async def _run_bg_ai():
+        try:
+            tmp_dir = Path(job.tmp_dir)
+            png_dir = tmp_dir / "frames"
+            seg_dir = tmp_dir / "segmented"
+            png_dir.mkdir(exist_ok=True)
+            seg_dir.mkdir(exist_ok=True)
 
-    frame_count = 0
-    try:
-        frame_count = await extract_frames(str(dest), str(png_dir), fps, trimStart, trimEnd)
-    except Exception as e:
-        await jobs.update(job.id, status="failed")
-        dest.unlink(missing_ok=True)
-        raise HTTPException(500, f"Frame extraction failed: {e}")
+            frame_count = await extract_frames(str(dest), str(png_dir), fps, trimStart, trimEnd)
+            if frame_count == 0:
+                raise RuntimeError("No frames extracted")
 
-    if frame_count == 0:
-        await jobs.update(job.id, status="failed")
-        dest.unlink(missing_ok=True)
-        raise HTTPException(400, "No frames extracted")
+            _progress[job.id] = {"stage": "segmenting", "current": 0, "total": frame_count}
+            await jobs.update(job.id, status="segmenting", frame_count=frame_count)
 
-    _progress[job.id] = {"stage": "segmenting", "current": 0, "total": frame_count}
-    await jobs.update(job.id, status="segmenting")
+            pngs = sorted(png_dir.glob("frame_*.png"))
+            completed = 0
+            for png in pngs:
+                out = seg_dir / png.name
+                ok = await segment_frame_ai(str(png), str(out))
+                if ok:
+                    completed += 1
+                _progress[job.id] = {"stage": "segmenting", "current": completed, "total": frame_count}
 
-    pngs = sorted(png_dir.glob("frame_*.png"))
-    completed = 0
-    for png in pngs:
-        out = seg_dir / png.name
-        ok = await segment_frame_ai(str(png), str(out))
-        if ok:
-            completed += 1
-        _progress[job.id] = {"stage": "segmenting", "current": completed, "total": frame_count}
+            if completed == 0:
+                raise RuntimeError("AI segmentation produced no frames")
 
-    if completed == 0:
-        await jobs.update(job.id, status="failed")
-        raise HTTPException(500, "AI segmentation produced no frames")
+            zip_io = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+            with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in sorted(seg_dir.glob("frame_*.png")):
+                    zf.write(f, f.name)
+            zip_io.close()
 
-    # Zip the segmented PNGs (with cleanup on failure)
-    zip_io = None
-    try:
-        zip_io = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in sorted(seg_dir.glob("frame_*.png")):
-                zf.write(f, f.name)
-        zip_io.close()
+            total_size = sum(f.stat().st_size for f in seg_dir.glob("frame_*.png"))
+            await jobs.update(
+                job.id, status="done",
+                frame_count=completed, total_size_bytes=total_size,
+                output_path=zip_io.name,
+            )
+            _progress[job.id] = {"stage": "done", "current": completed, "total": frame_count}
+        except Exception as e:
+            await jobs.update(job.id, status="failed")
+            logger.error("AI segmentation job %s failed: %s", job.id, e)
+        finally:
+            Path(dest).unlink(missing_ok=True)
 
-        total_size = sum(f.stat().st_size for f in seg_dir.glob("frame_*.png"))
-        await jobs.update(job.id, status="done", frame_count=completed, total_size_bytes=total_size)
+    asyncio.create_task(_run_bg_ai())
 
-        base_name = safe_name.rsplit(".", 1)[0]
-        bg.add_task(_cleanup_temp, zip_io.name)
-        bg.add_task(lambda: dest.unlink(missing_ok=True))
+    return {"jobId": job.id, "status": "extracting", "sourceFilename": file.filename}
 
-        return FileResponse(
-            zip_io.name,
-            media_type="application/zip",
-            filename=f"{base_name}-segmented-frames.zip",
-            headers={"Content-Disposition": f"attachment; filename={base_name}-segmented-frames.zip"},
-        )
-    except Exception:
-        if zip_io:
-            _cleanup_temp(zip_io.name)
-        dest.unlink(missing_ok=True)
-        raise
+
+@router.get("/bgremove/ai/{job_id}/result")
+async def bgremove_ai_result(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "done":
+        raise HTTPException(400, "AI segmentation not yet complete")
+    zip_path = job.output_path
+    if not zip_path or not Path(zip_path).exists():
+        raise HTTPException(404, "Result not found")
+    base_name = Path(job.source_filename).stem
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"{base_name}-segmented-frames.zip",
+        headers={"Content-Disposition": f"attachment; filename={base_name}-segmented-frames.zip"},
+    )

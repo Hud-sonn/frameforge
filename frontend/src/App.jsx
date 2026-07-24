@@ -160,7 +160,7 @@ function SettingsPanel({ job, fps, setFps, trimStart, trimEnd, setTrim, fmt, set
   );
 }
 
-function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, encoding, fmt }) {
+function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, encoding, fmt, fallback }) {
   const presets = preview.samples || [];
   if (presets.length === 0) return (<div className="panel"><p>No preview data — video may be too short.</p></div>);
 
@@ -169,7 +169,7 @@ function QualityPreview({ preview, selectedQuality, onSelect, onEncode, onBack, 
   return (
     <div className="panel">
       <div className="panel-title">Quality Preview</div>
-      <div className="panel-sub">Compare quality levels. Click a column to select that quality for the full encode.</div>
+      <div className="panel-sub">Compare quality levels. Click a column to select that quality for the full encode.{fallback && <span className="badge-warn" style={{ marginLeft: 8 }}>JPEG fallback ON</span>}</div>
       <div className="preview-grid">
         <div className="preview-header">Frame</div>
         {qualityLabels.map((l, qi) => (<div key={qi} className="preview-header">{l}</div>))}
@@ -282,7 +282,7 @@ function ResultsPanel({ result, sourceSizeBytes, onReset }) {
   );
 }
 
-function JobHistoryList({ jobs, onRerun }) {
+function JobHistoryList({ jobs, onRerun, onDelete }) {
   if (!jobs.length) return (<div className="panel"><div className="panel-title">No jobs yet</div><div className="panel-sub">Extract some frames first.</div></div>);
   return (
     <div className="panel">
@@ -298,6 +298,7 @@ function JobHistoryList({ jobs, onRerun }) {
           <div className="h-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => onRerun(j)}>Re-run</button>
             {j.manifest_path && <a className="btn btn-ghost btn-sm" href={api.downloadUrl(j.id)} download>Download</a>}
+            <button className="btn btn-ghost btn-sm" onClick={() => onDelete(j.id)} style={{ color: 'var(--danger)' }}>Delete</button>
           </div>
         </div>
       ))}</div>
@@ -581,11 +582,7 @@ function BgRemovePanel() {
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState({ current: 0, total: 100 });
   const [result, setResult] = useState(null);
-  const resultUrlRef = useRef(null);
-
-  useEffect(() => {
-    return () => { if (resultUrlRef.current) { URL.revokeObjectURL(resultUrlRef.current); resultUrlRef.current = null; } };
-  }, []);
+  const [aiJobId, setAiJobId] = useState(null);
 
   const [keyColor, setKeyColor] = useState('0x00FF00');
   const [similarity, setSimilarity] = useState(0.2);
@@ -623,27 +620,47 @@ function BgRemovePanel() {
     setStage('processing'); setError(null);
     setProgress({ current: 0, total: 100 });
     try {
-      const res = await api.bgRemoveAI(file, { fps, trimStart, trimEnd });
-      if (!res.ok) { const t = await res.text(); throw new Error(t); }
-      const blob = await res.blob();
-      setResult({ blob, filename: file.name.replace(/\.[^.]+$/, '') + '-segmented-frames.zip', type: 'ai' });
-      setStage('done');
+      const data = await api.bgRemoveAI(file, { fps, trimStart, trimEnd });
+      setAiJobId(data.jobId);
     } catch (e) { setError(e.message); setStage('idle'); }
   };
 
-  const reset = () => { setFile(null); setResult(null); setError(null); setStage('idle'); setMethod(null); };
+  useEffect(() => {
+    if (stage !== 'processing' || !aiJobId) return;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const st = await api.pollJobStatus(aiJobId);
+        const p = st.progress || {};
+        setProgress(p);
+        if (st.status === 'done' || p.stage === 'done') {
+          const url = api.bgRemoveAIResultUrl(aiJobId);
+          setResult({ filename: (file?.name || 'video').replace(/\.[^.]+$/, '') + '-segmented-frames.zip', url });
+          setStage('done');
+          return;
+        }
+        if (st.status === 'failed') { setError('AI segmentation failed'); setStage('idle'); return; }
+        timer = setTimeout(poll, 800);
+      } catch { timer = setTimeout(poll, 1500); }
+    };
+    poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [stage, aiJobId, file]);
+
+  const reset = () => { setFile(null); setResult(null); setError(null); setStage('idle'); setMethod(null); setAiJobId(null); };
 
   const aiFrameCount = trimEnd > trimStart ? Math.floor((trimEnd - trimStart) * fps) : 0;
   const estTime = Math.round(aiFrameCount * 10);
 
   if (stage === 'done' && result) {
-    if (!resultUrlRef.current) resultUrlRef.current = URL.createObjectURL(result.blob);
     return (
       <div className="panel">
         <div className="panel-title">Background Removal Complete</div>
         <div className="panel-title-sub">{result.filename}</div>
         <div className="head-actions mt-16" style={{ justifyContent: 'flex-end' }}>
-          <a className="btn btn-ghost" href={resultUrlRef.current} download={result.filename}><SvgDownload /> Download</a>
+          <a className="btn btn-ghost" href={result.url} download={result.filename}><SvgDownload /> Download</a>
           <button className="btn btn-primary" onClick={reset}>Remove Another</button>
         </div>
       </div>
@@ -902,6 +919,10 @@ export default function App() {
 
   const loadJobs = useCallback(async () => { try { setJobs(await api.getJobs()); } catch {} }, []);
 
+  const doDeleteJob = useCallback(async (jobId) => {
+    try { await api.deleteJob(jobId); loadJobs(); } catch (e) { setError(e.message); }
+  }, [loadJobs]);
+
   useEffect(() => {
     api.healthCheck().then(setHealth).catch(() => setHealth({ status: 'error', ffmpeg: { ffmpeg: false } }));
     loadJobs();
@@ -1057,16 +1078,16 @@ export default function App() {
         {page === 'trim' && <TrimExport />}
         {page === 'compress' && <CompressPanel />}
         {page === 'bgremove' && <BgRemovePanel />}
-        {page === 'history' && <JobHistoryList jobs={jobs} onRerun={doRerun} />}
+        {page === 'history' && <JobHistoryList jobs={jobs} onRerun={doRerun} onDelete={doDeleteJob} />}
 
         {page === 'new' && (<>
-          <div className="stepper">{steps.map((s, i) => (<React.Fragment key={s}>{i > 0 && <div className="step-line" />}<div className={`step ${i < step ? 'done' : i === step ? 'active' : ''}`}><span className="num">{i < step ? '✓' : i + 1}</span> {s}</div></React.Fragment>))}</div>
+          <div className="stepper">{steps.map((s, i) => (<React.Fragment key={s}>{i > 0 && <div className="step-line" />}<div className={`step ${i < step ? 'done' : i === step ? 'active' : ''}`} onClick={() => { if (i < step) setStep(i); }} style={i < step ? { cursor: 'pointer' } : undefined}><span className="num">{i < step ? '✓' : i + 1}</span> {s}</div></React.Fragment>))}</div>
 
           {step === 0 && <Dropzone onFile={doUpload} uploading={uploading} />}
 
           {step === 1 && job && <SettingsPanel job={job} fps={fps} setFps={setFps} trimStart={trimStart} trimEnd={trimEnd} setTrim={(s, e) => { setTrimStart(s); setTrimEnd(e); }} fmt={fmt} setFmt={setFmt} quality={quality} setQuality={setQuality} speed={speed} setSpeed={setSpeed} maxWidth={maxWidth} setMaxWidth={setMaxWidth} fallback={fallback} setFallback={setFallback} frameCount={frameCount} onPreview={doPreview} previewing={previewing} av1OK={av1OK} />}
 
-          {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} fmt={fmt} />}
+          {step === 2 && preview && <QualityPreview preview={preview} selectedQuality={selectedQualityIdx} onSelect={setSelectedQualityIdx} onEncode={doEncode} onBack={() => setStep(1)} encoding={encoding} fmt={fmt} fallback={fallback && fmt !== 'jpeg'} />}
 
           {step === 3 && <ProgressPanel jobId={job?.jobId} onDone={handleEncodeDone} onError={handleEncodeError} />}
 

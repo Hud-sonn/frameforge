@@ -111,5 +111,9 @@ class JobsManager:
         await self._save()
         return job
 
+    async def remove(self, job_id: str) -> None:
+        self._jobs.pop(job_id, None)
+        await self._save()
+
     def list_all(self) -> list[Job]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)

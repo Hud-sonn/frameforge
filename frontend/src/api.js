@@ -95,6 +95,10 @@ export async function convertImage(file, { fmt, quality, resize }, signal) {
   return fetchJson(`${API}/convert-image`, { method: 'POST', body: form }, signal);
 }
 
+export async function deleteJob(jobId, signal) {
+  return fetchJson(`${API}/jobs/${jobId}`, { method: 'DELETE' }, signal);
+}
+
 export function downloadUrl(jobId) {
   return `${API}/jobs/${jobId}/download`;
 }
@@ -128,5 +132,9 @@ export async function bgRemoveAI(file, { fps, trimStart, trimEnd }, signal) {
   form.append('fps', String(fps));
   form.append('trimStart', String(trimStart));
   form.append('trimEnd', String(trimEnd));
-  return fetch(`${API}/bgremove/ai`, { method: 'POST', body: form, signal });
+  return fetchJson(`${API}/bgremove/ai`, { method: 'POST', body: form }, signal);
+}
+
+export function bgRemoveAIResultUrl(jobId) {
+  return `${API}/bgremove/ai/${jobId}/result`;
 }
